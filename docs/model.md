@@ -97,6 +97,7 @@ final class Change {
     public readonly ?string $id;        // the stable server change-row id — YOUR dedup key
     public readonly ?string $event;     // see the event table
     public readonly ?string $personId;
+    public readonly ?string $shareCode; // the person's profile share code — every event (may be null)
     public readonly ?string $slug;      // field_updated/field_deleted/consent_* only
     public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value; // field_updated only; typed like Value->value
     public readonly ?bool   $live;      // field_updated only
