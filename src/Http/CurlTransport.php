@@ -84,11 +84,11 @@ final class CurlTransport implements Transport
         $resp = curl_exec($ch);
         if ($resp === false) {
             $err = curl_error($ch);
-            curl_close($ch);
             throw new ApiError(0, null, "request to {$url} failed: {$err}");
         }
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
+        // No curl_close(): since PHP 8.0 the CurlHandle is an object freed automatically
+        // when $ch goes out of scope; curl_close() is a no-op (we require PHP >= 8.1).
 
         return new Response($status, (string) $resp, $responseHeaders);
     }
