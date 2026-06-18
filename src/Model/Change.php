@@ -11,8 +11,10 @@ use Allus\CompanyData\Crypto\BinaryHandle;
  *
  * {@see $id} is the stable server change-row id (the pump dedupes on it after a
  * crash/replay); {@see $at} is the change time (there is NO separate
- * updatedAt on a change). {@see $slug}/{@see $value}/{@see $live} are present only
- * on {@code field_updated} (connection/consent events carry no slot/value).
+ * updatedAt on a change). {@see $shareCode} is the person's profile share code,
+ * present on every event (may be null). {@see $slug}/{@see $value}/{@see $live}
+ * are present only on {@code field_updated} (connection/consent events carry no
+ * slot/value).
  */
 final class Change
 {
@@ -24,6 +26,8 @@ final class Change
         public readonly ?string $id,
         public readonly ?string $event,
         public readonly ?string $personId,
+        /** The person's profile share code (every event; may be null). */
+        public readonly ?string $shareCode = null,
         public readonly ?string $slug = null,
         public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value = null,
         public readonly ?bool $live = null,
@@ -65,6 +69,7 @@ final class Change
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             event: $event,
             personId: $personId !== null ? (string) $personId : null,
+            shareCode: isset($obj['share_code']) ? (string) $obj['share_code'] : null,
             slug: $slug,
             value: $value,
             live: $live,

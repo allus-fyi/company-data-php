@@ -263,4 +263,19 @@ final class ModelsTest extends TestCase
         self::assertInstanceOf(\DateTimeImmutable::class, $logs[1]->at);
         self::assertSame($body['items'][1], $logs[1]->raw);
     }
+
+    public function testChangeIncludesShareCode(): void
+    {
+        // Every change event carries the person's profile share_code (nullable).
+        $body = ['changes' => [
+            ['id' => 'chg-1', 'event' => 'connection_created',
+             'person_user_id' => 'person-1', 'share_code' => 'ABC123',
+             'at' => '2026-06-17T12:00:00Z'],
+            ['id' => 'chg-2', 'event' => 'connection_created',
+             'person_user_id' => 'person-2', 'at' => '2026-06-17T12:00:00Z'], // no share_code -> null
+        ]];
+        $changes = Change::listFromApi($body, fn (string $s): ?string => null, $this->decryptValue());
+        self::assertSame('ABC123', $changes[0]->shareCode);
+        self::assertNull($changes[1]->shareCode);
+    }
 }
