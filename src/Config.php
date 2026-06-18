@@ -79,6 +79,8 @@ final class Config
     /**
      * @param array<string,string> $webhooks per-webhook HMAC secrets keyed by id
      *        (plus the {@see SINGLE_WEBHOOK_KEY} flat shortcut), normalized.
+     * @param array{username:string,password:string}|null $webhookBasic Basic-auth credentials.
+     * @param array{name:string,value:string}|null $webhookHeader custom-header name/value pair.
      */
     public function __construct(
         public readonly string $apiUrl,
@@ -91,6 +93,14 @@ final class Config
         public readonly array $webhooks = [],
         public readonly string $cacheDir = './allus-cache',
         public readonly string $format = 'json',
+        // OPTIONAL — alternative webhook auth methods, mirroring the platform's
+        // per-webhook delivery auth. Configure AT MOST ONE family among
+        // hmac (webhooks/webhook_secret) | bearer | basic | header | none;
+        // two or more → ConfigError. See webhookAuthMethod().
+        public readonly ?string $webhookBearerToken = null, // "Authorization: Bearer <token>"
+        public readonly ?array $webhookBasic = null,        // {"username","password"} → Basic auth
+        public readonly ?array $webhookHeader = null,       // {"name","value"} → custom header
+        public readonly bool $webhookAuthNone = false,      // explicit opt-out — verify always true
     ) {
     }
 
@@ -166,6 +176,79 @@ final class Config
             $webhooks[self::SINGLE_WEBHOOK_KEY] = (string) $flatSecret;
         }
 
+        // Alternative webhook auth methods (file-config only — no env overrides).
+        // Validate object shapes. Truthiness mirrors the Python reference
+        // (`if bearer:` / `not basic.get(...)`), not PHP's empty() (which would
+        // also reject the string "0").
+        $bearer = null;
+        $rawBearer = $data['webhook_bearer_token'] ?? null;
+        if (self::pyTruthy($rawBearer)) {
+            $bearer = (string) $rawBearer;
+        }
+
+        $basic = null;
+        $rawBasic = $data['webhook_basic'] ?? null;
+        if ($rawBasic !== null) {
+            if (
+                !is_array($rawBasic)
+                || array_is_list($rawBasic)
+                || !self::pyTruthy($rawBasic['username'] ?? null)
+                || !self::pyTruthy($rawBasic['password'] ?? null)
+            ) {
+                throw new ConfigError(
+                    '"webhook_basic" must be an object with non-empty "username" and "password"'
+                );
+            }
+            $basic = [
+                'username' => (string) $rawBasic['username'],
+                'password' => (string) $rawBasic['password'],
+            ];
+        }
+
+        $header = null;
+        $rawHeader = $data['webhook_header'] ?? null;
+        if ($rawHeader !== null) {
+            if (
+                !is_array($rawHeader)
+                || array_is_list($rawHeader)
+                || !self::pyTruthy($rawHeader['name'] ?? null)
+                || !self::pyTruthy($rawHeader['value'] ?? null)
+            ) {
+                throw new ConfigError(
+                    '"webhook_header" must be an object with non-empty "name" and "value"'
+                );
+            }
+            $header = [
+                'name' => (string) $rawHeader['name'],
+                'value' => (string) $rawHeader['value'],
+            ];
+        }
+
+        $authNone = ($data['webhook_auth_none'] ?? null) === true;
+
+        // At most one webhook auth method may be configured.
+        $present = [];
+        if ($webhooks !== []) {
+            $present[] = 'hmac';
+        }
+        if ($bearer !== null) {
+            $present[] = 'bearer';
+        }
+        if ($basic !== null) {
+            $present[] = 'basic';
+        }
+        if ($header !== null) {
+            $present[] = 'header';
+        }
+        if ($authNone) {
+            $present[] = 'none';
+        }
+        if (count($present) > 1) {
+            throw new ConfigError(
+                'configure at most one webhook auth method (found: ' . implode(', ', $present) . ')'
+            );
+        }
+
         // Required fields (fail fast).
         $missing = [];
         foreach (self::REQUIRED as $name) {
@@ -200,6 +283,10 @@ final class Config
             webhooks: $webhooks,
             cacheDir: isset($values['cacheDir']) ? (string) $values['cacheDir'] : './allus-cache',
             format: $format,
+            webhookBearerToken: $bearer,
+            webhookBasic: $basic,
+            webhookHeader: $header,
+            webhookAuthNone: $authNone,
         );
     }
 
@@ -219,6 +306,33 @@ final class Config
     }
 
     /**
+     * The single configured webhook auth method, or {@code null} if none is set.
+     *
+     * Returns one of {@code "hmac"} | {@code "bearer"} | {@code "basic"} |
+     * {@code "header"} | {@code "none"}. Config loading guarantees at most one is
+     * configured, so the order here is only a tie-break that never triggers.
+     */
+    public function webhookAuthMethod(): ?string
+    {
+        if ($this->webhookAuthNone) {
+            return 'none';
+        }
+        if ($this->webhookBearerToken !== null && $this->webhookBearerToken !== '') {
+            return 'bearer';
+        }
+        if ($this->webhookBasic !== null) {
+            return 'basic';
+        }
+        if ($this->webhookHeader !== null) {
+            return 'header';
+        }
+        if ($this->webhooks !== []) {
+            return 'hmac';
+        }
+        return null;
+    }
+
+    /**
      * Read an env var, treating "" as unset (so an empty export doesn't shadow a
      * file value).
      */
@@ -229,5 +343,28 @@ final class Config
             return null;
         }
         return $v;
+    }
+
+    /**
+     * Python-style truthiness, used to mirror the reference's webhook-auth
+     * presence checks exactly (`if bearer:` / `not basic.get("username")`).
+     * Falsy for: null, false, "", 0, 0.0, []. Notably the string "0" is TRUTHY
+     * (unlike PHP's empty()).
+     */
+    private static function pyTruthy(mixed $v): bool
+    {
+        if ($v === null || $v === false) {
+            return false;
+        }
+        if (is_string($v)) {
+            return $v !== '';
+        }
+        if (is_int($v) || is_float($v)) {
+            return $v != 0;
+        }
+        if (is_array($v)) {
+            return $v !== [];
+        }
+        return (bool) $v;
     }
 }

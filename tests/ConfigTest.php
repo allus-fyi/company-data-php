@@ -174,4 +174,77 @@ final class ConfigTest extends TestCase
         $params = array_map(static fn (\ReflectionParameter $p) => $p->getName(), $refl->getParameters());
         self::assertSame(['webhookId'], $params);
     }
+
+    // ── alternative webhook auth methods (file-config) ────────────────────────
+
+    /**
+     * Minimal valid config base (no webhook auth) to layer alt-auth fields on.
+     *
+     * @return array<string,mixed>
+     */
+    private function minimal(): array
+    {
+        return [
+            'api_url' => 'https://api.allme.fyi',
+            'client_id' => 'svc',
+            'client_secret' => 's',
+            'service_private_key' => './k.pem',
+            'key_passphrase' => 'p',
+        ];
+    }
+
+    public function testConfigRejectsTwoAuthMethods(): void
+    {
+        $data = $this->minimal() + ['webhook_secret' => 'h', 'webhook_bearer_token' => 'b'];
+        $this->expectException(ConfigError::class);
+        $this->expectExceptionMessage('configure at most one webhook auth method (found: hmac, bearer)');
+        Config::fromFile($this->write($data));
+    }
+
+    public function testConfigRejectsBearerPlusNone(): void
+    {
+        $data = $this->minimal() + ['webhook_bearer_token' => 'b', 'webhook_auth_none' => true];
+        $this->expectException(ConfigError::class);
+        $this->expectExceptionMessage('configure at most one webhook auth method (found: bearer, none)');
+        Config::fromFile($this->write($data));
+    }
+
+    public function testConfigBasicRequiresBothFields(): void
+    {
+        $data = $this->minimal() + ['webhook_basic' => ['username' => 'u']];
+        $this->expectException(ConfigError::class);
+        $this->expectExceptionMessage('"webhook_basic" must be an object with non-empty "username" and "password"');
+        Config::fromFile($this->write($data));
+    }
+
+    public function testConfigHeaderRequiresBothFields(): void
+    {
+        $data = $this->minimal() + ['webhook_header' => ['name' => 'X-H']];
+        $this->expectException(ConfigError::class);
+        $this->expectExceptionMessage('"webhook_header" must be an object with non-empty "name" and "value"');
+        Config::fromFile($this->write($data));
+    }
+
+    public function testConfigSingleMethodOkAndMethodName(): void
+    {
+        $cfg = Config::fromFile($this->write($this->minimal() + ['webhook_bearer_token' => 'b']));
+        self::assertSame('bearer', $cfg->webhookAuthMethod());
+        self::assertSame('b', $cfg->webhookBearerToken);
+
+        $cfg2 = Config::fromFile($this->write($this->minimal() + ['webhook_secret' => 'h']));
+        self::assertSame('hmac', $cfg2->webhookAuthMethod());
+
+        $cfg3 = Config::fromFile($this->write($this->minimal() + ['webhook_auth_none' => true]));
+        self::assertSame('none', $cfg3->webhookAuthMethod());
+
+        $cfg4 = Config::fromFile($this->write($this->minimal() + ['webhook_basic' => ['username' => 'u', 'password' => 'p']]));
+        self::assertSame('basic', $cfg4->webhookAuthMethod());
+
+        $cfg5 = Config::fromFile($this->write($this->minimal() + ['webhook_header' => ['name' => 'X-H', 'value' => 'v']]));
+        self::assertSame('header', $cfg5->webhookAuthMethod());
+
+        // No webhook auth configured → null.
+        $cfg6 = Config::fromFile($this->write($this->minimal()));
+        self::assertNull($cfg6->webhookAuthMethod());
+    }
 }
