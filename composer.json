@@ -1,0 +1,37 @@
+{
+    "name": "allus/company-data",
+    "description": "PHP SDK for the allus company-data API: typed, plaintext, slug-keyed conclusions with transparent decryption.",
+    "type": "library",
+    "license": "proprietary",
+    "keywords": ["allus", "allme", "company-data", "sdk"],
+    "homepage": "https://github.com/allus/company-data-php",
+    "support": {
+        "source": "https://github.com/allus/company-data-php",
+        "issues": "https://github.com/allus/company-data-php/issues"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-openssl": "*",
+        "ext-json": "*",
+        "phpseclib/phpseclib": "^3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10 || ^11"
+    },
+    "autoload": {
+        "psr-4": {
+            "Allus\\CompanyData\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Allus\\CompanyData\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit"
+    }
+}
