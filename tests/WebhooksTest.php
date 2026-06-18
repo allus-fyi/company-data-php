@@ -296,6 +296,89 @@ final class WebhooksTest extends TestCase
         self::assertSame(self::$vector['text']['plaintext'], $change->value);
     }
 
+    // ── alternative webhook auth methods (bearer / basic / header / none) ─────
+
+    /**
+     * Minimal Config carrying one alt-auth field (verify never reads the PEM here).
+     *
+     * @param array{username:string,password:string}|null $basic
+     * @param array{name:string,value:string}|null $header
+     */
+    private static function authCfg(
+        ?string $bearer = null,
+        ?array $basic = null,
+        ?array $header = null,
+        bool $none = false,
+    ): Config {
+        return new Config(
+            apiUrl: 'https://api.allme.fyi',
+            clientId: 'svc',
+            clientSecret: 's',
+            servicePrivateKey: 'unused.pem',
+            keyPassphrase: 'unused',
+            webhookBearerToken: $bearer,
+            webhookBasic: $basic,
+            webhookHeader: $header,
+            webhookAuthNone: $none,
+        );
+    }
+
+    public function testVerifyBearerTrue(): void
+    {
+        $cfg = self::authCfg(bearer: 'tok123');
+        self::assertTrue(Webhooks::verify('{}', ['Authorization' => 'Bearer tok123'], $cfg));
+    }
+
+    public function testVerifyBearerFalseWrongToken(): void
+    {
+        $cfg = self::authCfg(bearer: 'tok123');
+        self::assertFalse(Webhooks::verify('{}', ['Authorization' => 'Bearer nope'], $cfg));
+    }
+
+    public function testVerifyBearerFalseMissingHeader(): void
+    {
+        $cfg = self::authCfg(bearer: 'tok123');
+        self::assertFalse(Webhooks::verify('{}', [], $cfg));
+    }
+
+    public function testVerifyBasicTrue(): void
+    {
+        $cfg = self::authCfg(basic: ['username' => 'u', 'password' => 'p']);
+        $token = base64_encode('u:p');
+        self::assertTrue(Webhooks::verify('{}', ['Authorization' => 'Basic ' . $token], $cfg));
+    }
+
+    public function testVerifyBasicFalseWrongPassword(): void
+    {
+        $cfg = self::authCfg(basic: ['username' => 'u', 'password' => 'p']);
+        $bad = base64_encode('u:wrong');
+        self::assertFalse(Webhooks::verify('{}', ['Authorization' => 'Basic ' . $bad], $cfg));
+    }
+
+    public function testVerifyHeaderTrueCaseInsensitiveName(): void
+    {
+        $cfg = self::authCfg(header: ['name' => 'X-My-Auth', 'value' => 'sekret']);
+        self::assertTrue(Webhooks::verify('{}', ['x-my-auth' => 'sekret'], $cfg));
+    }
+
+    public function testVerifyHeaderFalseWrongValue(): void
+    {
+        $cfg = self::authCfg(header: ['name' => 'X-My-Auth', 'value' => 'sekret']);
+        self::assertFalse(Webhooks::verify('{}', ['X-My-Auth' => 'nope'], $cfg));
+    }
+
+    public function testVerifyNoneAlwaysTrue(): void
+    {
+        $cfg = self::authCfg(none: true);
+        self::assertTrue(Webhooks::verify('anything at all', [], $cfg));
+    }
+
+    public function testVerifyNoMethodConfiguredFalse(): void
+    {
+        $cfg = self::authCfg();
+        self::assertFalse(Webhooks::verify('{}', ['Authorization' => 'Bearer x'], $cfg));
+    }
+
     // ── helpers (account key) ─────────────────────────────────────────────────
 
     /**

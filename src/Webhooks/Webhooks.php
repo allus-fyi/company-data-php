@@ -45,19 +45,67 @@ final class Webhooks
     private const ENC_MARKER = '_enc';
 
     /**
-     * Verify the {@code X-Allus-Signature} HMAC over the raw body.
+     * Verify a webhook against the SINGLE configured auth method.
      *
-     * Reads {@code X-Allus-Webhook-Id}, looks up that webhook's HMAC secret in
-     * config (falling back to the single-webhook shortcut), recomputes
-     * {@code HMAC-SHA256(rawBody, secret)} as hex, and constant-time-compares it to
-     * the {@code X-Allus-Signature} header. Returns {@code false} on a missing
-     * signature, unknown/unconfigured webhook id, or mismatch — never raises for a
-     * bad signature (that is {@see handle()}'s job).
+     * Mirrors the platform's per-webhook delivery auth (one method per webhook):
+     *
+     * - {@code hmac}   — recompute {@code HMAC-SHA256(rawBody, secret)} (secret
+     *   selected by {@code X-Allus-Webhook-Id}) and constant-time-compare it to
+     *   {@code X-Allus-Signature}.
+     * - {@code bearer} — {@code Authorization} equals {@code Bearer <token>}.
+     * - {@code basic}  — {@code Authorization} equals {@code Basic <base64(user:pass)>}.
+     * - {@code header} — the configured custom header equals the configured value.
+     * - {@code none}   — always {@code true} (explicit opt-out).
+     *
+     * All comparisons are constant-time. Returns {@code false} on a
+     * missing/mismatched credential, or when no method is configured — never raises
+     * for a bad credential (that is {@see handle()}'s job). Which method is used is
+     * decided entirely by config ({@see Config::webhookAuthMethod()}); config
+     * loading guarantees at most one is set.
      *
      * @param array<string,string> $headers
      */
     public static function verify(string $rawBody, array $headers, Config $config): bool
     {
+        $method = $config->webhookAuthMethod();
+        if ($method === null) {
+            return false;
+        }
+        if ($method === 'none') {
+            return true;
+        }
+
+        if ($method === 'bearer') {
+            $got = self::header($headers, 'authorization');
+            if ($got === null) {
+                return false;
+            }
+            return hash_equals('Bearer ' . ($config->webhookBearerToken ?? ''), $got);
+        }
+
+        if ($method === 'basic') {
+            $got = self::header($headers, 'authorization');
+            if ($got === null) {
+                return false;
+            }
+            /** @var array{username:string,password:string} $basic */
+            $basic = $config->webhookBasic;
+            $creds = $basic['username'] . ':' . $basic['password'];
+            $token = base64_encode($creds);
+            return hash_equals('Basic ' . $token, $got);
+        }
+
+        if ($method === 'header') {
+            /** @var array{name:string,value:string} $header */
+            $header = $config->webhookHeader;
+            $got = self::header($headers, $header['name']);
+            if ($got === null) {
+                return false;
+            }
+            return hash_equals($header['value'], $got);
+        }
+
+        // method === 'hmac'
         $signature = self::header($headers, self::HDR_SIGNATURE);
         if ($signature === null || $signature === '') {
             return false;
