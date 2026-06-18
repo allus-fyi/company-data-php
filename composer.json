@@ -4,10 +4,10 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["allus", "allme", "company-data", "sdk"],
-    "homepage": "https://github.com/allus/company-data-php",
+    "homepage": "https://github.com/allus-fyi/company-data-php",
     "support": {
-        "source": "https://github.com/allus/company-data-php",
-        "issues": "https://github.com/allus/company-data-php/issues"
+        "source": "https://github.com/allus-fyi/company-data-php",
+        "issues": "https://github.com/allus-fyi/company-data-php/issues"
     },
     "require": {
         "php": ">=8.1",
