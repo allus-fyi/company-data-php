@@ -357,6 +357,138 @@ app you'll almost always use the client methods. See [Webhooks](#webhooks).
 
 ---
 
+## Company documents
+
+The service can also publish **documents** — contracts, statements, terms, or any
+structured/binary payload — either **broadcast** to everyone connected or addressed
+to **one person**. The encryption rule is simple and automatic:
+
+* **A per-person document is ALWAYS end-to-end encrypted** to that recipient's
+  public key — for *any* value of `is_private`. The SDK fetches the recipient key
+  (from the `share_code`, or resolved from the `connection_id` / `person_user_id`)
+  and encrypts before sending. As always, **no method takes a key or secret
+  argument** — keys come from your config.
+* **A broadcast document (no target) is plaintext.** It cannot be locked, so
+  `is_private=true` without a per-person target **throws** `ConfigError`.
+* `is_private` is **device-display-only** (it tells the recipient's app to show a
+  lock / decrypt-on-load instead of rendering inline) — it does **not** change the
+  value shape or whether encryption happens. Per-person ⇒ encrypted, broadcast ⇒
+  plaintext, regardless of `is_private`.
+
+`payload_kind` is either `'json'` (a structured value) or `'file'` (raw bytes,
+optionally with a MIME type; for `'file'` the metadata row is created first, then
+the bytes are uploaded — encrypted for a per-person target, raw for a broadcast).
+
+### `createDocument(array $opts)`
+
+```php
+createDocument(array $opts): Document
+```
+
+```php
+use Allus\CompanyData\Client;
+
+$client = Client::fromConfig('allus.json');
+
+// A BROADCAST plaintext JSON document — visible to everyone connected, no target.
+$terms = $client->createDocument([
+    'name'         => 'Terms of Service v3',
+    'payload_kind' => 'json',
+    'json_value'   => ['version' => 3, 'effective' => '2026-07-01', 'url' => 'https://acme.example/tos'],
+    // no connection_id / person_user_id  → broadcast → plaintext
+    // is_private MUST stay false here (a broadcast can't be locked)
+]);
+echo $terms->id, ' ', $terms->status, PHP_EOL;
+
+// A PER-PERSON document — automatically end-to-end encrypted to the recipient.
+// Address it with ONE of: connection_id, person_user_id, or share_code.
+$contract = $client->createDocument([
+    'name'          => 'Service Agreement',
+    'payload_kind'  => 'json',
+    'json_value'    => ['plan' => 'pro', 'monthly' => 4900, 'currency' => 'EUR'],
+    'connection_id' => $someConnectionId,   // or 'person_user_id' => …, or 'share_code' => 'AB12CD'
+    'is_private'    => true,                 // device-display-only; encryption happens regardless
+    'status'        => 'offering',
+    'metadata'      => ['ref' => 'AGR-2026-118'],
+]);
+
+// Read a per-person JSON document back — decryption happens transparently with
+// the SDK's own service key (only for the per-person, encrypted shape):
+$plain = $client->document($contract->id)->json();   // ['plan' => 'pro', …]
+
+// A file document (raw bytes). Per-person → encrypted; broadcast → plaintext.
+$signed = $client->createDocument([
+    'name'          => 'Signed PDF',
+    'payload_kind'  => 'file',
+    'file_bytes'    => file_get_contents('/tmp/agreement.pdf'),
+    'file_mime'     => 'application/pdf',
+    'person_user_id'=> $personUserId,        // per-person → bytes encrypted on upload
+]);
+```
+
+* **Options** (associative array): `name` (required), `payload_kind` (`'json'`|`'file'`, required), `is_private` (default `false`), `kind` (default `'document'`), `description`, `status`, `metadata`, and **one** target — `connection_id`, `person_user_id`, or `share_code` (omit all three for a broadcast). For `'json'`: `json_value`. For `'file'`: `file_bytes` (+ optional `file_mime`).
+* **Returns:** the created `Document`.
+* **Throws:** `ConfigError` (missing `name`, bad `payload_kind`, `is_private=true` with no target, or a missing `json_value`/`file_bytes`); `AuthError`, `ApiError`, `RateLimitError`.
+
+### `listDocuments(...)` / `document($id)`
+
+```php
+listDocuments(?string $personUserId = null, ?string $status = null, int $limit = 100, int $offset = 0): array  // list<Document>
+document(string $documentId): Document
+```
+
+```php
+foreach ($client->listDocuments(status: 'active', limit: 50) as $doc) {
+    echo $doc->id, ' ', $doc->name, ' [', $doc->status, ']', PHP_EOL;
+}
+
+$doc = $client->document($documentId);
+$value = $doc->payloadKind === 'json' ? $doc->json() : $doc->value;   // json() decrypts per-person docs
+```
+
+* `listDocuments` filters optionally by `personUserId` and/or `status` and pages with `limit`/`offset`.
+* `document($id)` fetches one. Call `->json()` on a `'json'` document to get the plaintext (it transparently decrypts a per-person, encrypted document; a broadcast doc is already plaintext).
+
+### `updateDocumentStatus` / `updateDocumentMetadata` / `deleteDocument`
+
+```php
+updateDocumentStatus(string $documentId, string $status): Document
+updateDocumentMetadata(string $documentId, ?array $metadata = null, ?string $name = null, ?string $description = null): Document
+deleteDocument(string $documentId): void
+```
+
+```php
+$client->updateDocumentStatus($documentId, 'ready_to_sign');   // offering | ready_to_sign | active | active_but_ending | ended
+$client->updateDocumentMetadata($documentId, name: 'Service Agreement (rev B)', metadata: ['ref' => 'AGR-2026-118b']);
+$client->deleteDocument($documentId);                          // also removes the on-disk file
+```
+
+* `updateDocumentStatus` moves a document through its lifecycle (`offering` → `ready_to_sign` → `active` → `active_but_ending` → `ended`).
+* `updateDocumentMetadata` updates `name`, `description`, and/or `metadata` — pass at least one (else `ConfigError`).
+* `deleteDocument` deletes the document and its stored file.
+
+### Reacting to a status change in the pump
+
+When a document's lifecycle status changes, the feed/webhook emits a
+`document_status_changed` `Change` carrying `documentId` + the new `status` (and
+the usual `personId` / `shareCode` / `at`). Handle it alongside your field events:
+
+```php
+$client->processChanges(function (\Allus\CompanyData\Model\Change $change): void {
+    if (alreadyProcessed($change->id)) {
+        return;
+    }
+    match ($change->event) {
+        'field_updated'           => store($change->personId, $change->slug, $change->value),
+        'document_status_changed' => onDocumentStatus($change->documentId, $change->status, $change->personId),
+        default                   => null,
+    };
+    markProcessed($change->id);
+});
+```
+
+---
+
 ## The typed value model
 
 You work with these objects and nothing else (`use Allus\CompanyData\Model\…`):
@@ -428,9 +560,11 @@ A change-feed / webhook event.
 | Property | Meaning |
 |----------|---------|
 | `id` | **The stable server change-row id — your dedup key** (captured before the server delete). |
-| `event` | `connection_created`, `connection_deleted`, `field_updated`, `field_deleted`, `consent_accepted`, `consent_declined`. |
+| `event` | `connection_created`, `connection_deleted`, `field_updated`, `field_deleted`, `consent_accepted`, `consent_declined`, `document_status_changed`. |
 | `personId` | The person the change is about (may be `null`). |
+| `shareCode` | The person's profile share code — present on every event (may be `null`). |
 | `slug`, `value`, `live` | Present only on `field_updated`; `value` is typed exactly like `Value->value` (incl. a lazy `BinaryHandle` for binaries). Connection/consent events carry no slot/value. |
+| `documentId`, `status` | Present only on `document_status_changed` — the document's id and its new lifecycle status. |
 | `at` | `?DateTimeImmutable` of the change. (There is no separate `updatedAt` on a change.) |
 
 ### `->raw`
