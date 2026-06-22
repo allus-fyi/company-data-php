@@ -24,16 +24,25 @@ final class FakeTransport implements Transport
     public array $posts = [];
     /** @var list<array{url: string, query: ?array<string,scalar>, headers: array<string,string>}> */
     public array $gets = [];
+    /** @var list<array{method: string, url: string, body: ?string, headers: array<string,string>}> */
+    public array $sends = [];
 
     /** @var (callable(string, ?array<string,scalar>): Response)|null */
     private $getRouter;
 
+    /** @var (callable(string, string, ?string, array<string,string>): Response)|null */
+    private $writeRouter;
+
     /**
      * @param (callable(string, ?array<string,scalar>): Response)|null $getRouter
+     * @param (callable(string, string, ?string, array<string,string>): Response)|null $writeRouter
+     *   invoked for write verbs (POST/PUT/DELETE via {@see send()}) with
+     *   ({@code $method, $url, $body, $headers}).
      */
-    public function __construct(?callable $getRouter = null)
+    public function __construct(?callable $getRouter = null, ?callable $writeRouter = null)
     {
         $this->getRouter = $getRouter;
+        $this->writeRouter = $writeRouter;
     }
 
     public function post(string $url, array $form, array $headers): Response
@@ -53,6 +62,19 @@ final class FakeTransport implements Transport
             return ($this->getRouter)($url, $query);
         }
         return array_shift($this->getResponses) ?? throw new \RuntimeException('no queued GET response');
+    }
+
+    public function send(string $method, string $url, ?array $query, ?string $body, array $headers): Response
+    {
+        if ($query !== null && $query !== []) {
+            $sep = str_contains($url, '?') ? '&' : '?';
+            $url .= $sep . http_build_query($query);
+        }
+        $this->sends[] = ['method' => $method, 'url' => $url, 'body' => $body, 'headers' => $headers];
+        if ($this->writeRouter !== null) {
+            return ($this->writeRouter)($method, $url, $body, $headers);
+        }
+        return self::json(200, []);
     }
 
     // ── response builders ───────────────────────────────────────────────────

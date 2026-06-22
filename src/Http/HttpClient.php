@@ -149,6 +149,66 @@ final class HttpClient
      */
     public function get(string $path, ?array $params = null): array|string
     {
+        return $this->request('GET', $path, $params);
+    }
+
+    /**
+     * POST {@code $path} with a JSON body or raw bytes → parsed body.
+     *
+     * @param array<string,mixed>|list<mixed>|null $jsonBody
+     *
+     * @return array<string,mixed>|list<mixed>|string
+     */
+    public function post(string $path, ?array $jsonBody = null, ?string $rawBody = null, ?string $contentType = null): array|string
+    {
+        return $this->request('POST', $path, null, $jsonBody, $rawBody, $contentType);
+    }
+
+    /**
+     * PUT {@code $path} with a JSON body → parsed body.
+     *
+     * @param array<string,mixed>|list<mixed>|null $jsonBody
+     *
+     * @return array<string,mixed>|list<mixed>|string
+     */
+    public function put(string $path, ?array $jsonBody = null): array|string
+    {
+        return $this->request('PUT', $path, null, $jsonBody);
+    }
+
+    /**
+     * DELETE {@code $path} → parsed body.
+     *
+     * @return array<string,mixed>|list<mixed>|string
+     */
+    public function delete(string $path): array|string
+    {
+        return $this->request('DELETE', $path);
+    }
+
+    /**
+     * The shared request loop for every verb.
+     *
+     * Adds the bearer token + an {@code Accept} header matching
+     * {@code config.format}, carries an optional JSON or raw-bytes body, parses
+     * JSON or XML, and maps non-2xx to the SDK errors: 401 → one
+     * refresh-and-retry then {@see AuthError}; 429 → bounded Retry-After backoff
+     * then {@see RateLimitError}; other non-2xx → {@see ApiError} (carrying the
+     * body's {@code error_key} when present).
+     *
+     * @param array<string,scalar>|null $params
+     * @param array<string,mixed>|list<mixed>|null $jsonBody
+     *
+     * @return array<string,mixed>|list<mixed>|string
+     */
+    private function request(
+        string $method,
+        string $path,
+        ?array $params = null,
+        ?array $jsonBody = null,
+        ?string $rawBody = null,
+        ?string $contentType = null,
+    ): array|string {
         $url = $this->url($path);
         $wantsXml = $this->config->format === 'xml';
         $accept = $wantsXml ? 'application/xml' : 'application/json';
@@ -157,10 +217,24 @@ final class HttpClient
         $refreshed401 = false;
         while (true) {
             $token = $this->bearer(false);
-            $resp = $this->transport->get($url, $params, [
+            $headers = [
                 'Authorization' => "Bearer {$token}",
                 'Accept' => $accept,
-            ]);
+            ];
+
+            if ($method === 'GET') {
+                $resp = $this->transport->get($url, $params, $headers);
+            } else {
+                $body = null;
+                if ($rawBody !== null) {
+                    $body = $rawBody;
+                    $headers['Content-Type'] = $contentType ?? 'application/octet-stream';
+                } elseif ($jsonBody !== null) {
+                    $body = json_encode($jsonBody, JSON_THROW_ON_ERROR);
+                    $headers['Content-Type'] = 'application/json';
+                }
+                $resp = $this->transport->send($method, $url, $params, $body, $headers);
+            }
 
             $status = $resp->status;
 

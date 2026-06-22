@@ -8,6 +8,7 @@ use Allus\CompanyData\Errors\DecryptError;
 use phpseclib3\Crypt\Common\PrivateKey;
 use phpseclib3\Crypt\RSA;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
+use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
 use phpseclib3\Crypt\PublicKeyLoader;
 
 /**
@@ -164,6 +165,92 @@ final class Crypto
             throw new DecryptError('decrypted plaintext is not valid UTF-8');
         }
         return $plaintext;
+    }
+
+    /**
+     * Load a base64 SPKI/DER public key (the platform's {@code GET /api/keys}
+     * {@code public_key}) → an RSA public key configured for OAEP-**SHA256**
+     * (MGF1-SHA256) — the per-person encryption contract.
+     *
+     * Config-only key handling does NOT apply to a RECIPIENT public key: it is not
+     * a secret and is fetched live from the API per-recipient (never configured).
+     * The SDK still never accepts a *private* key/passphrase as a method argument.
+     *
+     * @throws DecryptError on invalid base64, a malformed SPKI key, or a non-RSA key.
+     */
+    public static function loadPublicKey(string $spkiB64): RSAPublicKey
+    {
+        $der = base64_decode($spkiB64, strict: true);
+        if ($der === false) {
+            throw new DecryptError('recipient public_key is not valid base64');
+        }
+        try {
+            $key = PublicKeyLoader::load($der);
+        } catch (\Throwable $e) {
+            throw new DecryptError("recipient public_key is not a valid SPKI key: {$e->getMessage()}", 0, $e);
+        }
+        if (!$key instanceof RSAPublicKey) {
+            throw new DecryptError('recipient public_key is not an RSA public key');
+        }
+        // Pin BOTH the OAEP digest and MGF1 to SHA-256 (never the SHA-1 default).
+        /** @var RSAPublicKey $k */
+        $k = $key->withPadding(RSA::ENCRYPTION_OAEP)->withHash('sha256')->withMGFHash('sha256');
+        return $k;
+    }
+
+    /**
+     * Encrypt a UTF-8 string FOR a recipient RSA public key → a
+     * {@code {"_enc":1,k,iv,d}} wrapper. The exact inverse of {@see decrypt()}:
+     *
+     *     aesKey  = 32 random bytes
+     *     d       = AES-256-GCM(aesKey, iv=12 random bytes).encrypt(utf8(plaintext))  # tag appended
+     *     k       = RSA-OAEP(SHA-256, MGF1-SHA256).encrypt(aesKey, publicKey)
+     *
+     * Used for EVERY per-person (targeted) document (json + file), independent of
+     * is_private — broadcast docs stay plaintext.
+     *
+     * PHP specifics: {@code openssl_public_encrypt} ONLY does OAEP-SHA1, so the RSA
+     * step uses **phpseclib3** (the {@see loadPublicKey}-configured key's
+     * {@code ->encrypt()}). AES-256-GCM uses the openssl ext with the 16-byte tag
+     * appended to the ciphertext (the platform layout).
+     *
+     * @param RSAPublicKey $publicKey an OAEP-SHA256-configured key (from {@see loadPublicKey}).
+     *
+     * @return array{_enc: int, k: string, iv: string, d: string}
+     *
+     * @throws DecryptError on an unexpected AES-GCM failure.
+     */
+    public static function encryptForPublicKey(string $plaintext, RSAPublicKey $publicKey): array
+    {
+        $aesKey = random_bytes(32);
+        $iv = random_bytes(self::GCM_IV_LEN); // 12
+        $tag = '';
+        // AES-256-GCM: produce the 16-byte tag and APPEND it to the ciphertext (platform layout).
+        $ct = openssl_encrypt(
+            $plaintext,
+            'aes-256-gcm',
+            $aesKey,
+            OPENSSL_RAW_DATA,
+            $iv,
+            $tag,
+            '',
+            self::GCM_TAG_LEN,
+        );
+        if ($ct === false) {
+            throw new DecryptError('AES-256-GCM encryption failed');
+        }
+        // RSA-OAEP(SHA-256, MGF1-SHA256) wrap the AES key. The key handed in is
+        // already OAEP-SHA256-configured by loadPublicKey().
+        $encKey = $publicKey->encrypt($aesKey);
+        if (!is_string($encKey)) {
+            throw new DecryptError('RSA-OAEP key wrap failed');
+        }
+        return [
+            '_enc' => 1,
+            'k' => base64_encode($encKey),
+            'iv' => base64_encode($iv),
+            'd' => base64_encode($ct . $tag),
+        ];
     }
 
     /**

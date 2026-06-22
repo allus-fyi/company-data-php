@@ -10,7 +10,9 @@ use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Http\Response;
+use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Model\Connection;
+use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\RequestField;
 use Allus\CompanyData\Tests\Support\FakeTransport;
@@ -72,6 +74,26 @@ final class ClientTest extends TestCase
         $t = new FakeTransport($router);
         $http = new HttpClient($this->config(), transport: $t);
         return [new Client($this->config(), http: $http, sleep: fn (float $_s): null => null), $t];
+    }
+
+    /**
+     * @param (callable(string, ?array<string,scalar>): Response)|null $getRouter
+     * @param callable(string, string, ?string, array<string,string>): Response $writeRouter
+     * @return array{0: Client, 1: FakeTransport}
+     */
+    private function clientRw(?callable $getRouter, callable $writeRouter): array
+    {
+        $t = new FakeTransport($getRouter, $writeRouter);
+        $http = new HttpClient($this->config(), transport: $t);
+        return [new Client($this->config(), http: $http, sleep: fn (float $_s): null => null), $t];
+    }
+
+    /** A GET router that fails the test if any GET happens (broadcast: no key fetch). */
+    private function noGet(): callable
+    {
+        return function (string $url, ?array $q): Response {
+            throw new \AssertionError("unexpected GET {$url}");
+        };
     }
 
     /** @return array<string,mixed> */
@@ -327,6 +349,233 @@ final class ClientTest extends TestCase
         ], JSON_THROW_ON_ERROR));
         $this->expectException(ConfigError::class);
         Client::fromConfig($cfgPath);
+    }
+
+    // ── company documents (write) ──────────────────────────────────────────────
+
+    public function testCreateDocumentBroadcastJsonIsPlaintext(): void
+    {
+        $posted = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$posted): Response {
+            self::assertSame('POST', $method);
+            self::assertStringEndsWith('/documents', $url);
+            $posted['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
+            return FakeTransport::json(201, [
+                'id' => 'd1', 'kind' => 'document', 'name' => 'Terms', 'description' => null,
+                'status' => 'active', 'payload_kind' => 'json', 'is_private' => false,
+                'value' => $posted['body']['value'], 'metadata' => null,
+                'created_at' => null, 'updated_at' => null,
+            ]);
+        };
+        [$client] = $this->clientRw($this->noGet(), $writeRouter);
+        $doc = $client->createDocument([
+            'name' => 'Terms', 'payload_kind' => 'json',
+            'json_value' => ['url' => 'x', 'v' => '1'], 'status' => 'active',
+        ]);
+        self::assertNull($posted['body']['target']); // broadcast, no target
+        self::assertSame(['url' => 'x', 'v' => '1'], $posted['body']['value']); // plaintext, no _enc
+        self::assertFalse($posted['body']['is_private']);
+        self::assertSame('d1', $doc->id);
+        self::assertSame('active', $doc->status);
+    }
+
+    public function testCreateDocumentPerPersonEncryptsForBothPrivacy(): void
+    {
+        $spki = Vector::publicSpkiB64();
+
+        foreach ([false, true] as $isPrivate) {
+            $keysFetched = 0;
+            $getRouter = function (string $url, ?array $q) use ($spki, &$keysFetched): Response {
+                self::assertStringEndsWith('/api/keys/ABC123', $url);
+                $keysFetched++;
+                return FakeTransport::json(200, ['public_key' => $spki]);
+            };
+            $captured = [];
+            $writeRouter = function (string $method, string $url, ?string $body) use (&$captured, $isPrivate): Response {
+                $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
+                return FakeTransport::json(201, [
+                    'id' => 'd2', 'kind' => 'document', 'name' => 'PP', 'description' => null,
+                    'status' => 'active', 'payload_kind' => 'json', 'is_private' => $isPrivate,
+                    'value' => $captured['body']['value'], 'metadata' => null,
+                    'created_at' => null, 'updated_at' => null,
+                ]);
+            };
+            [$client] = $this->clientRw($getRouter, $writeRouter);
+            $doc = $client->createDocument([
+                'name' => 'PP', 'payload_kind' => 'json', 'json_value' => ['plan' => 'pro'],
+                'connection_id' => 'conn-1', 'share_code' => 'ABC123', 'is_private' => $isPrivate,
+            ]);
+            self::assertSame(1, $keysFetched); // fetched the recipient key
+            $val = $captured['body']['value'];
+            self::assertIsArray($val);
+            self::assertSame(1, $val['_enc']); // ENCRYPTED, any is_private
+            self::assertArrayHasKey('k', $val);
+            self::assertArrayHasKey('iv', $val);
+            self::assertArrayHasKey('d', $val);
+            self::assertSame(['connection_id' => 'conn-1'], $captured['body']['target']);
+            self::assertSame($isPrivate, $captured['body']['is_private']);
+            // round-trips through the SDK's own decrypt → the original plaintext
+            $plain = Crypto::decrypt($val, Vector::privateKey());
+            self::assertSame(['plan' => 'pro'], json_decode($plain, true, flags: JSON_THROW_ON_ERROR));
+            self::assertSame('d2', $doc->id);
+        }
+    }
+
+    public function testCreateDocumentPrivateBroadcastRaises(): void
+    {
+        [$client] = $this->clientRw($this->noGet(), fn (string $m, string $u, ?string $b): Response => FakeTransport::json(200, []));
+        $this->expectException(ConfigError::class);
+        $client->createDocument([
+            'name' => 'x', 'payload_kind' => 'json', 'json_value' => ['a' => 1], 'is_private' => true,
+        ]);
+    }
+
+    public function testCreateDocumentFileBroadcastUploadsRawBytes(): void
+    {
+        $calls = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$calls): Response {
+            $calls[] = ['method' => $method, 'url' => $url, 'body' => $body];
+            if (str_ends_with($url, '/documents')) {
+                return FakeTransport::json(201, [
+                    'id' => 'f1', 'kind' => 'document', 'name' => 'C', 'description' => null,
+                    'status' => 'active', 'payload_kind' => 'file', 'is_private' => false,
+                    'value' => ['_pending' => true], 'metadata' => null,
+                    'created_at' => null, 'updated_at' => null,
+                ]);
+            }
+            self::assertStringEndsWith('/documents/f1/file', $url);
+            return FakeTransport::json(200, ['id' => 'f1']);
+        };
+        [$client] = $this->clientRw($this->noGet(), $writeRouter);
+        $client->createDocument([
+            'name' => 'C', 'payload_kind' => 'file', 'file_bytes' => '%PDF-1.4 x', 'file_mime' => 'application/pdf',
+        ]);
+        self::assertStringEndsWith('/documents', $calls[0]['url']);
+        self::assertNull(json_decode((string) $calls[0]['body'], true, flags: JSON_THROW_ON_ERROR)['target']);
+        self::assertStringEndsWith('/documents/f1/file', $calls[1]['url']);
+        self::assertSame('%PDF-1.4 x', $calls[1]['body']); // raw plaintext bytes
+    }
+
+    public function testCreateDocumentFilePerPersonUploadsWrapperBytes(): void
+    {
+        $spki = Vector::publicSpkiB64();
+        $calls = [];
+        $getRouter = fn (string $url, ?array $q): Response => FakeTransport::json(200, ['public_key' => $spki]);
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$calls): Response {
+            $calls[] = ['url' => $url, 'body' => $body];
+            if (str_ends_with($url, '/documents')) {
+                return FakeTransport::json(201, [
+                    'id' => 'f2', 'kind' => 'document', 'name' => 'C', 'description' => null,
+                    'status' => 'active', 'payload_kind' => 'file', 'is_private' => true,
+                    'value' => ['_pending' => true], 'metadata' => null,
+                    'created_at' => null, 'updated_at' => null,
+                ]);
+            }
+            return FakeTransport::json(200, ['id' => 'f2']);
+        };
+        [$client] = $this->clientRw($getRouter, $writeRouter);
+        $client->createDocument([
+            'name' => 'C', 'payload_kind' => 'file', 'file_bytes' => 'hello-bytes',
+            'file_mime' => 'application/pdf', 'person_user_id' => 'u1', 'share_code' => 'ABC123',
+            'is_private' => true,
+        ]);
+        $upload = $calls[1]['body'];
+        self::assertIsString($upload);
+        $wrapper = json_decode($upload, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(1, $wrapper['_enc']); // ciphertext wrapper bytes, not the raw file
+        // decrypt → the {"file":"data:...base64,..."} envelope holding the original bytes
+        $env = json_decode(Crypto::decrypt($wrapper, Vector::privateKey()), true, flags: JSON_THROW_ON_ERROR);
+        self::assertStringStartsWith('data:application/pdf;base64,', $env['file']);
+        self::assertSame('hello-bytes', base64_decode(explode(',', $env['file'], 2)[1], true));
+    }
+
+    public function testDocumentVerbsHitRightPath(): void
+    {
+        $seen = [];
+        $getRouter = function (string $url, ?array $q): Response {
+            if (str_ends_with($url, '/documents')) {
+                return FakeTransport::json(200, ['total' => 0, 'items' => []]);
+            }
+            if (str_contains($url, '/documents/d9')) {
+                return FakeTransport::json(200, ['id' => 'd9', 'payload_kind' => 'json', 'is_private' => false, 'value' => ['a' => 1]]);
+            }
+            throw new \AssertionError("unexpected GET {$url}");
+        };
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$seen): Response {
+            $seen[] = ['method' => $method, 'url' => $url, 'body' => $body];
+            return FakeTransport::json(200, ['id' => 'd9', 'payload_kind' => 'json', 'is_private' => false, 'value' => ['a' => 1], 'status' => 'ended']);
+        };
+        [$client] = $this->clientRw($getRouter, $writeRouter);
+        self::assertSame([], $client->listDocuments(status: 'active'));
+        self::assertSame('d9', $client->document('d9')->id);
+        $client->updateDocumentStatus('d9', 'ended');
+        $client->updateDocumentMetadata('d9', name: 'renamed');
+        $client->deleteDocument('d9');
+
+        $methods = array_map(
+            fn ($s) => [$s['method'], substr($s['url'], strpos($s['url'], '/api/company-data') + strlen('/api/company-data'))],
+            $seen,
+        );
+        self::assertContains(['PUT', '/documents/d9'], $methods);
+        self::assertSame(2, count(array_filter($methods, fn ($m) => $m === ['PUT', '/documents/d9'])));
+        self::assertContains(['DELETE', '/documents/d9'], $methods);
+    }
+
+    public function testChangeDocumentStatusChangedParses(): void
+    {
+        $served = false;
+        [$client] = $this->client(function (string $url, ?array $q) use (&$served): Response {
+            if (str_ends_with($url, '/request-fields')) {
+                return FakeTransport::json(200, ['request_fields' => []]);
+            }
+            if (str_ends_with($url, '/changes')) {
+                if ($served) {
+                    return FakeTransport::json(200, ['changes' => []]);
+                }
+                $served = true;
+                return FakeTransport::json(200, ['changes' => [[
+                    'id' => 'chg-doc', 'event' => 'document_status_changed',
+                    'person_user_id' => 'u-1', 'share_code' => 'ABC123',
+                    'document_id' => 'doc-9', 'status' => 'ended', 'at' => '2026-06-22T10:00:00Z',
+                ]]]);
+            }
+            throw new \AssertionError("unexpected GET {$url}");
+        });
+
+        $seen = [];
+        $client->processChanges(function ($c) use (&$seen): void {
+            $seen[] = $c;
+        });
+        self::assertCount(1, $seen);
+        $chg = $seen[0];
+        self::assertSame('document_status_changed', $chg->event);
+        self::assertSame('doc-9', $chg->documentId);
+        self::assertSame('ended', $chg->status);
+        self::assertSame('u-1', $chg->personId);
+        self::assertSame('ABC123', $chg->shareCode);
+        self::assertNull($chg->slug);
+        self::assertNull($chg->value);
+        self::assertNull($chg->live);
+    }
+
+    public function testDocumentModelPerPersonJsonDecrypts(): void
+    {
+        $wrapper = Crypto::encryptForPublicKey(json_encode(['plan' => 'pro'], JSON_THROW_ON_ERROR), Crypto::loadPublicKey(Vector::publicSpkiB64()));
+        $doc = Document::fromApi(
+            ['id' => 'd2', 'kind' => 'document', 'name' => 'PP', 'status' => 'active',
+             'payload_kind' => 'json', 'is_private' => true, 'value' => $wrapper, 'metadata' => []],
+            fn (array|string $w): string => Crypto::decrypt($w, Vector::privateKey()),
+        );
+        self::assertSame(['plan' => 'pro'], $doc->json()); // decrypted via injected decrypt
+    }
+
+    public function testDocumentModelBroadcastJsonIsPlaintext(): void
+    {
+        $doc = Document::fromApi([
+            'id' => 'd1', 'kind' => 'document', 'name' => 'Terms', 'status' => 'active',
+            'payload_kind' => 'json', 'is_private' => false, 'value' => ['v' => 1], 'metadata' => [],
+        ]);
+        self::assertSame(['v' => 1], $doc->json()); // no decrypt needed
     }
 
     private static function rmrf(string $dir): void

@@ -22,7 +22,7 @@ final class CurlTransport implements Transport
 
     public function post(string $url, array $form, array $headers): Response
     {
-        return $this->send('POST', $url, http_build_query($form), $headers);
+        return $this->dispatch('POST', $url, http_build_query($form), $headers, formEncoded: true);
     }
 
     public function get(string $url, ?array $query, array $headers): Response
@@ -31,24 +31,38 @@ final class CurlTransport implements Transport
             $sep = str_contains($url, '?') ? '&' : '?';
             $url .= $sep . http_build_query($query);
         }
-        return $this->send('GET', $url, null, $headers);
+        return $this->dispatch('GET', $url, null, $headers, formEncoded: false);
+    }
+
+    public function send(string $method, string $url, ?array $query, ?string $body, array $headers): Response
+    {
+        if ($query !== null && $query !== []) {
+            $sep = str_contains($url, '?') ? '&' : '?';
+            $url .= $sep . http_build_query($query);
+        }
+        // The Content-Type for a body is the caller's (in $headers) — don't force
+        // form-encoded (that's only for the token POST).
+        return $this->dispatch($method, $url, $body, $headers, formEncoded: false);
     }
 
     /**
      * @param array<string,string> $headers
+     * @param bool $formEncoded when true and $body !== null, set the
+     *   {@code application/x-www-form-urlencoded} Content-Type (the token POST);
+     *   otherwise the Content-Type is whatever is already in $headers.
      */
-    private function send(string $method, string $url, ?string $body, array $headers): Response
+    private function dispatch(string $method, string $url, ?string $body, array $headers, bool $formEncoded): Response
     {
         if (\function_exists('curl_init')) {
-            return $this->sendCurl($method, $url, $body, $headers);
+            return $this->sendCurl($method, $url, $body, $headers, $formEncoded);
         }
-        return $this->sendStream($method, $url, $body, $headers);
+        return $this->sendStream($method, $url, $body, $headers, $formEncoded);
     }
 
     /**
      * @param array<string,string> $headers
      */
-    private function sendCurl(string $method, string $url, ?string $body, array $headers): Response
+    private function sendCurl(string $method, string $url, ?string $body, array $headers, bool $formEncoded): Response
     {
         $ch = curl_init($url);
         if ($ch === false) {
@@ -58,7 +72,7 @@ final class CurlTransport implements Transport
         foreach ($headers as $k => $v) {
             $headerLines[] = "{$k}: {$v}";
         }
-        if ($body !== null) {
+        if ($body !== null && $formEncoded) {
             $headerLines[] = 'Content-Type: application/x-www-form-urlencoded';
         }
 
@@ -98,13 +112,13 @@ final class CurlTransport implements Transport
      *
      * @param array<string,string> $headers
      */
-    private function sendStream(string $method, string $url, ?string $body, array $headers): Response
+    private function sendStream(string $method, string $url, ?string $body, array $headers, bool $formEncoded): Response
     {
         $headerLines = [];
         foreach ($headers as $k => $v) {
             $headerLines[] = "{$k}: {$v}";
         }
-        if ($body !== null) {
+        if ($body !== null && $formEncoded) {
             $headerLines[] = 'Content-Type: application/x-www-form-urlencoded';
         }
         $context = stream_context_create([

@@ -14,7 +14,8 @@ use Allus\CompanyData\Crypto\BinaryHandle;
  * updatedAt on a change). {@see $shareCode} is the person's profile share code,
  * present on every event (may be null). {@see $slug}/{@see $value}/{@see $live}
  * are present only on {@code field_updated} (connection/consent events carry no
- * slot/value).
+ * slot/value). {@see $documentId}/{@see $status} are set on
+ * {@code document_status_changed}.
  */
 final class Change
 {
@@ -31,6 +32,10 @@ final class Change
         public readonly ?string $slug = null,
         public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value = null,
         public readonly ?bool $live = null,
+        /** Set on document_status_changed. */
+        public readonly ?string $documentId = null,
+        /** Set on document_status_changed. */
+        public readonly ?string $status = null,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
     ) {
@@ -73,6 +78,8 @@ final class Change
             slug: $slug,
             value: $value,
             live: $live,
+            documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
+            status: ($event === 'document_status_changed' && isset($obj['status'])) ? (string) $obj['status'] : null,
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
         );

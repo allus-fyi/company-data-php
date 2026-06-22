@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Allus\CompanyData;
 
 use Allus\CompanyData\Crypto\Crypto;
+use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Errors\DecryptError;
 use Allus\CompanyData\Errors\RateLimitError;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Connection;
+use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\RequestField;
 use Allus\CompanyData\Pump\Logger;
@@ -18,6 +20,7 @@ use Allus\CompanyData\Pump\NullLogger;
 use Allus\CompanyData\Pump\Pump;
 use Allus\CompanyData\Webhooks\Webhooks;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
+use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
 
 /**
  * Client facade.
@@ -63,6 +66,8 @@ final class Client
     private const CHANGES = self::BASE . '/changes';
     private const REQUEST_FIELDS = self::BASE . '/request-fields';
     private const LOGS = self::BASE . '/logs';
+    private const DOCUMENTS = self::BASE . '/documents';
+    private const KEYS = '/api/keys';
 
     private const DEFAULT_CONN_PAGE = 100;
 
@@ -85,6 +90,15 @@ final class Client
     private array $typeBySlug = [];
 
     private ?Pump $pump = null;
+
+    /**
+     * Recipient RSA public keys (by share_code) — cached for per-person document
+     * encryption. A public key is immutable + not a secret (fetched live, never
+     * configured).
+     *
+     * @var array<string,RSAPublicKey>
+     */
+    private array $pubKeyCache = [];
 
     /**
      * @param callable(float): void|null $sleep injectable for tests.
@@ -494,6 +508,276 @@ final class Client
         );
     }
 
+    // ── company documents (write) ───────────────────────────────────────────────
+
+    /**
+     * Fetch + cache the recipient RSA public key by share_code
+     * ({@code GET /api/keys/{shareCode}}).
+     *
+     * @throws ApiError when the API returns no public_key for the share_code.
+     * @throws DecryptError when the returned key is malformed.
+     */
+    private function recipientPublicKey(string $shareCode): RSAPublicKey
+    {
+        if (isset($this->pubKeyCache[$shareCode])) {
+            return $this->pubKeyCache[$shareCode];
+        }
+        $body = $this->http->get(self::KEYS . '/' . rawurlencode($shareCode));
+        $spki = is_array($body) ? ($body['public_key'] ?? null) : null;
+        if (!is_string($spki) || $spki === '') {
+            throw new ApiError(0, 'keys.not_found', "no public_key for share_code {$shareCode}");
+        }
+        $key = Crypto::loadPublicKey($spki);
+        $this->pubKeyCache[$shareCode] = $key;
+        return $key;
+    }
+
+    /**
+     * Resolve a target's share_code (the recipient public-key handle).
+     *
+     * Prefers a single-connection fetch (carries {@code share_code}); falls back
+     * to a connections scan by {@code user_id}. Pass an explicit {@code share_code}
+     * to {@see createDocument()} to skip this entirely.
+     *
+     * @throws ConfigError when no share_code can be resolved.
+     */
+    private function resolveShareCode(?string $connectionId, ?string $personUserId): string
+    {
+        if ($connectionId !== null && $connectionId !== '') {
+            $body = $this->http->get(self::CONNECTIONS . '/' . rawurlencode($connectionId));
+            $sc = is_array($body) ? ($body['share_code'] ?? null) : null;
+            if (is_string($sc) && $sc !== '') {
+                return $sc;
+            }
+        }
+        if ($personUserId !== null && $personUserId !== '') {
+            foreach ($this->connections() as $conn) {
+                $raw = $conn->raw;
+                if (($raw['user_id'] ?? null) === $personUserId || $conn->personId === $personUserId) {
+                    $sc = $raw['share_code'] ?? null;
+                    if (is_string($sc) && $sc !== '') {
+                        return $sc;
+                    }
+                }
+            }
+        }
+        throw new ConfigError(
+            'could not resolve a share_code for the target — pass shareCode explicitly'
+        );
+    }
+
+    /**
+     * Create a company document for a connection / person (PER-PERSON), or
+     * BROADCAST (no target).
+     *
+     * {@code payloadKind='json'} → {@code jsonValue} (object).
+     * {@code payloadKind='file'} → {@code fileBytes} (+ {@code fileMime}).
+     *
+     * Encryption is decided by the TARGET, not by is_private:
+     *   PER-PERSON ({@code connectionId}/{@code personUserId} given) → the value is
+     *     ALWAYS encrypted FOR THE RECIPIENT (share_code resolved from
+     *     connectionId/personUserId when not given) before it leaves the process —
+     *     for EVERY per-person doc, private or not. The server stores ciphertext.
+     *     NO key argument.
+     *   BROADCAST (no target) → the value is sent PLAINTEXT (you cannot
+     *     single-key-encrypt to all of a service's connections). A broadcast MUST
+     *     be non-private (a plaintext value cannot be locked); is_private=true
+     *     therefore requires a per-person target.
+     *
+     * is_private is a DISPLAY-ONLY flag passed through to the API — it governs the
+     * recipient device's lock vs decrypt-on-load behaviour, NOT whether the value
+     * is encrypted.
+     *
+     * @param array{
+     *     kind?: string, name: string, payload_kind: string, is_private?: bool,
+     *     description?: ?string, connection_id?: ?string, person_user_id?: ?string,
+     *     share_code?: ?string, json_value?: mixed, file_bytes?: ?string,
+     *     file_mime?: ?string, metadata?: ?array<string,mixed>, status?: ?string
+     * } $opts
+     *
+     * @throws ConfigError on a missing/invalid option (incl. private broadcast).
+     */
+    public function createDocument(array $opts): Document
+    {
+        $kind = (string) ($opts['kind'] ?? 'document');
+        $name = $opts['name'] ?? null;
+        $payloadKind = $opts['payload_kind'] ?? null;
+        $isPrivate = (bool) ($opts['is_private'] ?? false);
+        $description = $opts['description'] ?? null;
+        $connectionId = $opts['connection_id'] ?? null;
+        $personUserId = $opts['person_user_id'] ?? null;
+        $shareCode = $opts['share_code'] ?? null;
+        $jsonValue = $opts['json_value'] ?? null;
+        $fileBytes = $opts['file_bytes'] ?? null;
+        $fileMime = $opts['file_mime'] ?? null;
+        $metadata = $opts['metadata'] ?? null;
+        $status = $opts['status'] ?? null;
+
+        if (!is_string($name) || $name === '') {
+            throw new ConfigError("createDocument needs a 'name'");
+        }
+        if ($payloadKind !== 'json' && $payloadKind !== 'file') {
+            throw new ConfigError("payload_kind must be 'json' or 'file'");
+        }
+
+        $target = null;
+        if (is_string($connectionId) && $connectionId !== '') {
+            $target = ['connection_id' => $connectionId];
+        } elseif (is_string($personUserId) && $personUserId !== '') {
+            $target = ['person_user_id' => $personUserId];
+        }
+        // (else: broadcast — target stays null)
+
+        $perPerson = $target !== null;
+        if ($isPrivate && !$perPerson) {
+            // A plaintext broadcast cannot be locked — is_private needs a per-person target.
+            throw new ConfigError('is_private=true requires a per-person target (broadcast is plaintext)');
+        }
+
+        $pubkey = null;
+        if ($perPerson) {
+            // EVERY per-person doc is encrypted, private or not — fetch the recipient key.
+            $sc = is_string($shareCode) && $shareCode !== ''
+                ? $shareCode
+                : $this->resolveShareCode(
+                    is_string($connectionId) ? $connectionId : null,
+                    is_string($personUserId) ? $personUserId : null,
+                );
+            $pubkey = $this->recipientPublicKey($sc);
+        }
+
+        $body = [
+            'kind' => $kind,
+            'name' => $name,
+            'payload_kind' => $payloadKind,
+            'is_private' => $isPrivate,
+            'target' => $target,
+        ];
+        if ($description !== null) {
+            $body['description'] = $description;
+        }
+        if ($metadata !== null) {
+            $body['metadata'] = $metadata;
+        }
+        if ($status !== null) {
+            $body['status'] = $status;
+        }
+
+        if ($payloadKind === 'json') {
+            if ($jsonValue === null) {
+                throw new ConfigError("json_value is required for payload_kind='json'");
+            }
+            $body['value'] = $perPerson
+                ? Crypto::encryptForPublicKey(json_encode($jsonValue, JSON_THROW_ON_ERROR), $pubkey)
+                : $jsonValue;
+            $created = $this->http->post(self::DOCUMENTS, $body);
+            return Document::fromApi(self::docObj($created), fn (array|string $w): string => $this->decryptValue($w));
+        }
+
+        // file: create the metadata row first, then upload bytes to /{id}/file.
+        if (!is_string($fileBytes)) {
+            throw new ConfigError("file_bytes is required for payload_kind='file'");
+        }
+        $created = $this->http->post(self::DOCUMENTS, $body);
+        $doc = Document::fromApi(self::docObj($created), fn (array|string $w): string => $this->decryptValue($w));
+        $fileUrl = self::DOCUMENTS . '/' . rawurlencode((string) $doc->id) . '/file';
+        if ($perPerson) {
+            // Encrypt the file bytes (EVERY per-person doc): wrap the file envelope
+            // string, then send the wrapper as bytes.
+            $envelope = json_encode(['file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null)], JSON_THROW_ON_ERROR);
+            $wrapper = Crypto::encryptForPublicKey($envelope, $pubkey);
+            $this->http->post(
+                $fileUrl,
+                rawBody: json_encode($wrapper, JSON_THROW_ON_ERROR),
+                contentType: 'application/json',
+            );
+        } else {
+            // Broadcast — raw plaintext bytes.
+            $this->http->post(
+                $fileUrl,
+                rawBody: $fileBytes,
+                contentType: is_string($fileMime) && $fileMime !== '' ? $fileMime : 'application/octet-stream',
+            );
+        }
+        return $doc;
+    }
+
+    /**
+     * List this service's documents → {@code list<Document>} (paged; optional
+     * person/status filter).
+     *
+     * @return list<Document>
+     */
+    public function listDocuments(
+        ?string $personUserId = null,
+        ?string $status = null,
+        int $limit = 100,
+        int $offset = 0,
+    ): array {
+        $params = ['limit' => max(1, $limit), 'offset' => max(0, $offset)];
+        if ($personUserId !== null && $personUserId !== '') {
+            $params['person_user_id'] = $personUserId;
+        }
+        if ($status !== null && $status !== '') {
+            $params['status'] = $status;
+        }
+        $body = $this->http->get(self::DOCUMENTS, $params);
+        return Document::listFromApi(is_array($body) ? $body : [], fn (array|string $w): string => $this->decryptValue($w));
+    }
+
+    /** Fetch one document by id → {@see Document}. */
+    public function document(string $documentId): Document
+    {
+        $body = $this->http->get(self::DOCUMENTS . '/' . rawurlencode($documentId));
+        return Document::fromApi(self::docObj($body), fn (array|string $w): string => $this->decryptValue($w));
+    }
+
+    /**
+     * Set a document's lifecycle status
+     * (offering|ready_to_sign|active|active_but_ending|ended).
+     */
+    public function updateDocumentStatus(string $documentId, string $status): Document
+    {
+        $body = $this->http->put(self::DOCUMENTS . '/' . rawurlencode($documentId), ['status' => $status]);
+        return Document::fromApi(self::docObj($body), fn (array|string $w): string => $this->decryptValue($w));
+    }
+
+    /**
+     * Update a document's metadata / name / description.
+     *
+     * @param array<string,mixed>|null $metadata
+     *
+     * @throws ConfigError when no field to update is supplied.
+     */
+    public function updateDocumentMetadata(
+        string $documentId,
+        ?array $metadata = null,
+        ?string $name = null,
+        ?string $description = null,
+    ): Document {
+        $payload = [];
+        if ($metadata !== null) {
+            $payload['metadata'] = $metadata;
+        }
+        if ($name !== null) {
+            $payload['name'] = $name;
+        }
+        if ($description !== null) {
+            $payload['description'] = $description;
+        }
+        if ($payload === []) {
+            throw new ConfigError('updateDocumentMetadata needs metadata, name, or description');
+        }
+        $body = $this->http->put(self::DOCUMENTS . '/' . rawurlencode($documentId), $payload);
+        return Document::fromApi(self::docObj($body), fn (array|string $w): string => $this->decryptValue($w));
+    }
+
+    /** Delete a document (and its on-disk file). */
+    public function deleteDocument(string $documentId): void
+    {
+        $this->http->delete(self::DOCUMENTS . '/' . rawurlencode($documentId));
+    }
+
     // ── module-level helpers ──────────────────────────────────────────────────
 
     /**
@@ -541,5 +825,33 @@ final class Client
             return min($retryAfter, self::CONN_MAX_BACKOFF_S);
         }
         return min(self::CONN_DEFAULT_BACKOFF_S * (2 ** ($attempt - 1)), self::CONN_MAX_BACKOFF_S);
+    }
+
+    /**
+     * Pull the document object out of a create/get/update response.
+     *
+     * The API returns the bare document object; tolerate a {@code {"document": {...}}}
+     * wrapper too.
+     *
+     * @param array<string,mixed>|list<mixed>|string $body
+     *
+     * @return array<string,mixed>
+     */
+    private static function docObj(array|string $body): array
+    {
+        if (is_array($body)) {
+            $inner = $body['document'] ?? null;
+            if (is_array($inner)) {
+                return $inner;
+            }
+            return array_is_list($body) ? [] : $body;
+        }
+        return [];
+    }
+
+    /** Build a {@code data:<mime>;base64,<…>} URI for the per-person file envelope. */
+    private static function dataUri(string $fileBytes, ?string $mime): string
+    {
+        return 'data:' . ($mime ?? 'application/octet-stream') . ';base64,' . base64_encode($fileBytes);
     }
 }
