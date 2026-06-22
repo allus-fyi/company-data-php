@@ -592,7 +592,8 @@ final class Client
      *     kind?: string, name: string, payload_kind: string, is_private?: bool,
      *     description?: ?string, connection_id?: ?string, person_user_id?: ?string,
      *     share_code?: ?string, json_value?: mixed, file_bytes?: ?string,
-     *     file_mime?: ?string, metadata?: ?array<string,mixed>, status?: ?string
+     *     file_mime?: ?string, requires_signature?: bool, requires_acceptance?: bool,
+     *     metadata?: ?array<string,mixed>, status?: ?string
      * } $opts
      *
      * @throws ConfigError on a missing/invalid option (incl. private broadcast).
@@ -610,6 +611,8 @@ final class Client
         $jsonValue = $opts['json_value'] ?? null;
         $fileBytes = $opts['file_bytes'] ?? null;
         $fileMime = $opts['file_mime'] ?? null;
+        $requiresSignature = (bool) ($opts['requires_signature'] ?? false);
+        $requiresAcceptance = (bool) ($opts['requires_acceptance'] ?? false);
         $metadata = $opts['metadata'] ?? null;
         $status = $opts['status'] ?? null;
 
@@ -618,6 +621,9 @@ final class Client
         }
         if ($payloadKind !== 'json' && $payloadKind !== 'file') {
             throw new ConfigError("payload_kind must be 'json' or 'file'");
+        }
+        if ($kind !== 'document' && $kind !== 'agreement' && $kind !== 'subscription') {
+            throw new ConfigError("kind must be 'document', 'agreement' or 'subscription'");
         }
 
         $target = null;
@@ -629,6 +635,11 @@ final class Client
         // (else: broadcast — target stays null)
 
         $perPerson = $target !== null;
+        // A contract (agreement/subscription, or either flag) is ALWAYS per-person → it must target one person.
+        $isContract = $kind === 'agreement' || $kind === 'subscription' || $requiresSignature || $requiresAcceptance;
+        if ($isContract && !$perPerson) {
+            throw new ConfigError('a contract must target one connected person');
+        }
         if ($isPrivate && !$perPerson) {
             // A plaintext broadcast cannot be locked — is_private needs a per-person target.
             throw new ConfigError('is_private=true requires a per-person target (broadcast is plaintext)');
@@ -651,6 +662,8 @@ final class Client
             'name' => $name,
             'payload_kind' => $payloadKind,
             'is_private' => $isPrivate,
+            'requires_signature' => $requiresSignature,
+            'requires_acceptance' => $requiresAcceptance,
             'target' => $target,
         ];
         if ($description !== null) {

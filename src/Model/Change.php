@@ -36,6 +36,8 @@ final class Change
         public readonly ?string $documentId = null,
         /** Set on document_status_changed. */
         public readonly ?string $status = null,
+        /** Set on document_status_changed for a contract: signed | accepted | cancelled. */
+        public readonly ?string $action = null,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
     ) {
@@ -80,6 +82,7 @@ final class Change
             live: $live,
             documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
             status: ($event === 'document_status_changed' && isset($obj['status'])) ? (string) $obj['status'] : null,
+            action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
         );

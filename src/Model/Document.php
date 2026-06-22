@@ -39,6 +39,10 @@ final class Document
         public readonly ?array $metadata,
         public readonly ?\DateTimeImmutable $createdAt,
         public readonly ?\DateTimeImmutable $updatedAt,
+        public readonly bool $requiresSignature = false,
+        public readonly bool $requiresAcceptance = false,
+        /** @var array<int,array<string,mixed>> contract sign/accept audit trail (company-side reads only) */
+        public readonly array $signatures = [],
         private $decryptValue = null,
         public readonly array $raw = [],
     ) {
@@ -98,6 +102,9 @@ final class Document
             metadata: $metadata,
             createdAt: Coerce::dateTime($obj['created_at'] ?? null),
             updatedAt: Coerce::dateTime($obj['updated_at'] ?? null),
+            requiresSignature: (bool) Coerce::bool($obj['requires_signature'] ?? null),
+            requiresAcceptance: (bool) Coerce::bool($obj['requires_acceptance'] ?? null),
+            signatures: is_array($obj['signatures'] ?? null) ? array_values(array_filter($obj['signatures'], 'is_array')) : [],
             decryptValue: $decryptValue,
             raw: $obj,
         );
