@@ -12,6 +12,7 @@ use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Http\Response;
 use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Model\Connection;
+use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\RequestField;
@@ -430,6 +431,25 @@ final class ClientTest extends TestCase
         ]);
     }
 
+    public function testCreateDocumentContractWithoutTargetRaises(): void
+    {
+        [$client] = $this->clientRw($this->noGet(), fn (string $m, string $u, ?string $b): Response => FakeTransport::json(200, []));
+        $this->expectException(ConfigError::class);
+        $client->createDocument([
+            'name' => 'Agreement', 'payload_kind' => 'json', 'kind' => 'agreement',
+            'requires_signature' => true, 'json_value' => ['a' => 1],
+        ]);
+    }
+
+    public function testCreateDocumentInvalidKindRaises(): void
+    {
+        [$client] = $this->clientRw($this->noGet(), fn (string $m, string $u, ?string $b): Response => FakeTransport::json(200, []));
+        $this->expectException(ConfigError::class);
+        $client->createDocument([
+            'name' => 'x', 'payload_kind' => 'json', 'kind' => 'invalid', 'json_value' => ['a' => 1],
+        ]);
+    }
+
     public function testCreateDocumentFileBroadcastUploadsRawBytes(): void
     {
         $calls = [];
@@ -576,6 +596,35 @@ final class ClientTest extends TestCase
             'payload_kind' => 'json', 'is_private' => false, 'value' => ['v' => 1], 'metadata' => [],
         ]);
         self::assertSame(['v' => 1], $doc->json()); // no decrypt needed
+    }
+
+    public function testChangeDocumentStatusChangedCarriesAction(): void
+    {
+        $chg = Change::fromApi(
+            ['id' => 'chg-sign', 'event' => 'document_status_changed', 'person_user_id' => 'u-2',
+             'action' => 'signed', 'document_id' => 'doc-7', 'status' => 'active', 'at' => '2026-06-22T10:00:00Z'],
+            fn (string $s): ?string => null,
+            fn (array|string $w): string => '',
+        );
+        self::assertSame('document_status_changed', $chg->event);
+        self::assertSame('signed', $chg->action);
+        self::assertSame('doc-7', $chg->documentId);
+        self::assertSame('active', $chg->status);
+        self::assertNull($chg->slug);
+    }
+
+    public function testDocumentModelCarriesContractFlagsAndSignatures(): void
+    {
+        $doc = Document::fromApi([
+            'id' => 'c1', 'kind' => 'agreement', 'name' => 'Agreement', 'status' => 'active',
+            'payload_kind' => 'json', 'is_private' => false, 'value' => ['v' => 1], 'metadata' => [],
+            'requires_signature' => true, 'requires_acceptance' => false,
+            'signatures' => [['action' => 'signed', 'method' => 'biometric']],
+        ]);
+        self::assertTrue($doc->requiresSignature);
+        self::assertFalse($doc->requiresAcceptance);
+        self::assertCount(1, $doc->signatures);
+        self::assertSame('signed', $doc->signatures[0]['action']);
     }
 
     private static function rmrf(string $dir): void
