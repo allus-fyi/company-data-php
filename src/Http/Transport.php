@@ -31,4 +31,18 @@ interface Transport
      * @throws ApiError on a network failure (status 0).
      */
     public function get(string $url, ?array $query, array $headers): Response;
+
+    /**
+     * Send a request for any verb with an optional raw body (the verb's
+     * {@code Content-Type} is carried in {@code $headers}). The {@see HttpClient}
+     * uses this for the company-document write methods (JSON-body POST/PUT and
+     * raw-bytes file POST and DELETE); the form-encoded token POST stays on
+     * {@see post()}.
+     *
+     * @param array<string,scalar>|null $query   query parameters (appended to the URL).
+     * @param array<string,string>      $headers request headers (incl. Content-Type when $body !== null).
+     *
+     * @throws ApiError on a network failure (status 0).
+     */
+    public function send(string $method, string $url, ?array $query, ?string $body, array $headers): Response;
 }

@@ -65,6 +65,17 @@ final class Vector
     }
 
     /**
+     * The vector key's PUBLIC half as base64 SPKI/DER — what {@code GET /api/keys}
+     * returns as {@code public_key} (so per-person document encryption can fetch it).
+     */
+    public static function publicSpkiB64(): string
+    {
+        $pub = self::privateKey()->getPublicKey();
+        \assert($pub instanceof RSAPublicKey);
+        return base64_encode($pub->toString('PKCS8'));
+    }
+
+    /**
      * @return array{_enc: int, k: string, iv: string, d: string}
      */
     public static function wrap(RSAPublicKey $publicKey, string $plaintext): array

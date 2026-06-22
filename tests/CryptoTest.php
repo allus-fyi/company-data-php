@@ -9,7 +9,9 @@ use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Errors\DecryptError;
 use Allus\CompanyData\Tests\Support\Vector;
 use PHPUnit\Framework\TestCase;
+use phpseclib3\Crypt\RSA;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
+use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
 
 /**
  * Decryption core tests — the cross-language parity gate.
@@ -173,6 +175,62 @@ final class CryptoTest extends TestCase
         $captured['url'] = 'STALE';
         $handle->bytes();
         self::assertSame('STALE', $captured['url']);
+    }
+
+    // ── encryptForPublicKey round-trips through decrypt ────────────────────
+
+    public function testEncryptForPublicKeyRoundTripsThroughDecrypt(): void
+    {
+        // Generate a fresh RSA-2048 keypair, export the public half as base64
+        // SPKI/DER (what GET /api/keys returns), then encrypt→decrypt assert equal.
+        $priv = RSA::createKey(2048);
+        \assert($priv instanceof RSAPrivateKey);
+        $pubKey = $priv->getPublicKey();
+        \assert($pubKey instanceof RSAPublicKey);
+        $spkiB64 = base64_encode($pubKey->toString('PKCS8'));
+
+        $pub = Crypto::loadPublicKey($spkiB64);
+        // Configure the private key for OAEP-SHA256 decrypt (the person-value contract).
+        $decryptKey = $priv->withPadding(RSA::ENCRYPTION_OAEP)->withHash('sha256')->withMGFHash('sha256');
+        \assert($decryptKey instanceof RSAPrivateKey);
+
+        foreach (['hello', '{"a":1}', 'with-üñîçödé'] as $pt) {
+            $wrapper = Crypto::encryptForPublicKey($pt, $pub);
+            self::assertSame(1, $wrapper['_enc']);
+            self::assertArrayHasKey('k', $wrapper);
+            self::assertArrayHasKey('iv', $wrapper);
+            self::assertArrayHasKey('d', $wrapper);
+            self::assertSame($pt, Crypto::decrypt($wrapper, $decryptKey));
+        }
+    }
+
+    public function testEncryptForPublicKeyRoundTripsAgainstVectorKey(): void
+    {
+        // The vector's public half (base64 SPKI) → loadPublicKey → encrypt → the
+        // vector's own private key decrypts it. Proves parity with the shared key.
+        $pub = Crypto::loadPublicKey(self::vectorPubSpkiB64());
+        $wrapper = Crypto::encryptForPublicKey('round-trip', $pub);
+        self::assertSame('round-trip', Crypto::decrypt($wrapper, self::$key));
+    }
+
+    public function testLoadPublicKeyRejectsGarbage(): void
+    {
+        $this->expectException(DecryptError::class);
+        Crypto::loadPublicKey('not-base64!!');
+    }
+
+    public function testLoadPublicKeyRejectsNonSpki(): void
+    {
+        $this->expectException(DecryptError::class);
+        Crypto::loadPublicKey(base64_encode('not a spki key'));
+    }
+
+    /** The vector key's PUBLIC half as base64 SPKI/DER (what GET /api/keys returns). */
+    private static function vectorPubSpkiB64(): string
+    {
+        $pub = self::$key->getPublicKey();
+        \assert($pub instanceof RSAPublicKey);
+        return base64_encode($pub->toString('PKCS8'));
     }
 
     // ── anti-circularity: independent openssl + phpseclib cross-check ───────
