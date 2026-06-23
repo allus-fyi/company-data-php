@@ -13,6 +13,7 @@ use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Connection;
 use Allus\CompanyData\Model\Document;
+use Allus\CompanyData\Model\FlowRun;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\RequestField;
 use Allus\CompanyData\Pump\Logger;
@@ -67,6 +68,8 @@ final class Client
     private const REQUEST_FIELDS = self::BASE . '/request-fields';
     private const LOGS = self::BASE . '/logs';
     private const DOCUMENTS = self::BASE . '/documents';
+    private const FLOWS = self::BASE . '/flows';          // POST /flows/{flowId}/runs
+    private const FLOW_RUNS = self::BASE . '/flow-runs';  // list / get / answers / generate
     private const KEYS = '/api/keys';
 
     private const DEFAULT_CONN_PAGE = 100;
@@ -99,6 +102,9 @@ final class Client
      * @var array<string,RSAPublicKey>
      */
     private array $pubKeyCache = [];
+
+    /** The service RSA public key (public half of the loaded private key), derived once. */
+    private ?RSAPublicKey $servicePublicKey = null;
 
     /**
      * @param callable(float): void|null $sleep injectable for tests.
@@ -791,6 +797,219 @@ final class Client
         $this->http->delete(self::DOCUMENTS . '/' . rawurlencode($documentId));
     }
 
+    // ── contract-flow runs (company side — the company is a bound party) ─────────
+
+    /**
+     * Start a run for a connection. {@code $bindings} = {@code [party_key => user_id]} covering the
+     * flow's parties (each bound user must be the company or the connected person). Pins the flow's
+     * latest PUBLISHED version. {@code $connectionId} is the person-side
+     * {@code company_service_connections.id} for this service.
+     *
+     * @param array<string,string> $bindings
+     */
+    public function triggerFlowRun(string $flowId, string $connectionId, array $bindings): FlowRun
+    {
+        $body = ['target' => ['connection_id' => $connectionId], 'bindings' => $bindings];
+        $created = $this->http->post(self::FLOWS . '/' . rawurlencode($flowId) . '/runs', $body);
+        return FlowRun::fromApi(is_array($created) ? $created : []);
+    }
+
+    /**
+     * List this service's runs. A {@code null} status returns the unfiltered list; the default
+     * {@code 'awaiting_company'} is the actionable queue. Any other value is a status filter.
+     *
+     * @return list<FlowRun>
+     */
+    public function flowRuns(?string $status = 'awaiting_company'): array
+    {
+        $params = ($status !== null && $status !== '') ? ['status' => $status] : null;
+        $body = $this->http->get(self::FLOW_RUNS, $params);
+        $out = [];
+        foreach (self::listItems($body) as $o) {
+            if (is_array($o)) {
+                $out[] = FlowRun::fromApi($o);
+            }
+        }
+        return $out;
+    }
+
+    /** Fetch one run by id → {@see FlowRun}. */
+    public function flowRun(string $runId): FlowRun
+    {
+        $body = $this->http->get(self::FLOW_RUNS . '/' . rawurlencode($runId));
+        return FlowRun::fromApi(is_array($body) ? $body : []);
+    }
+
+    /**
+     * The service RSA public key = the public half of the loaded service private key. The run
+     * payload does NOT carry the service public key; the company makes its own answer copy by
+     * encrypting to the public half of the same RSA pair it already holds (config-only key handling
+     * — no extra fetch, no key arg). Configured OAEP-SHA256/MGF1-SHA256 like {@see Crypto::loadPublicKey}.
+     */
+    private function servicePublicKey(): RSAPublicKey
+    {
+        if ($this->servicePublicKey === null) {
+            /** @var RSAPublicKey $pub */
+            $pub = $this->privateKey->getPublicKey()
+                ->withPadding(\phpseclib3\Crypt\RSA::ENCRYPTION_OAEP)
+                ->withHash('sha256')
+                ->withMGFHash('sha256');
+            $this->servicePublicKey = $pub;
+        }
+        return $this->servicePublicKey;
+    }
+
+    /**
+     * Decrypt the company's service-key answer copies → {@code [slug => plaintext]}. Only the rows
+     * whose {@code for_user_id} is the company's bound user_id are decryptable with the service key.
+     *
+     * @return array<string,string>
+     */
+    private function decryptRunAnswers(FlowRun $run): array
+    {
+        $out = [];
+        $serviceUid = $run->serviceUserId();
+        foreach ($run->answers as $row) {
+            if (($row['for_user_id'] ?? null) !== $serviceUid) {
+                continue;
+            }
+            $slug = $row['slug'] ?? null;
+            $value = $row['value'] ?? null;
+            if (!is_string($slug) || $value === null) {
+                continue;
+            }
+            /** @var array<string,mixed>|string $value */
+            $out[$slug] = $this->decryptValue($value);
+        }
+        return $out;
+    }
+
+    /**
+     * Resolve a person party's RSA public key for per-party answer encryption. Prefers a
+     * caller-supplied key, else resolves the person's share_code from the run's connection →
+     * {@code GET /api/keys/{code}}.
+     *
+     * Integration gap: the run payload exposes neither person public keys nor per-binding share
+     * codes, so the SDK resolves via the connection. Supply {@code $partyPubKeys} to skip the lookup.
+     *
+     * @param array<string,RSAPublicKey> $partyPubKeys
+     */
+    private function flowPersonPublicKey(FlowRun $run, string $uid, array $partyPubKeys): RSAPublicKey
+    {
+        if (isset($partyPubKeys[$uid])) {
+            return $partyPubKeys[$uid];
+        }
+        $sc = $this->resolveShareCode($run->connectionId, $uid);
+        return $this->recipientPublicKey($sc);
+    }
+
+    /**
+     * Fill the company's current node and advance.
+     *
+     * {@code $fill} = {@code [slug => plaintext_value]} the caller computed for this node. For EACH
+     * answer the SDK encrypts one copy per bound party (the company via the service public key; each
+     * person party via their public key), evaluates the next node LOCALLY (ordered outgoing edges,
+     * first match) over the full decrypted answer map, and POSTs {@code {answers, next_node?/leaf,
+     * next_party?}}. Returns the refreshed {@see FlowRun}. A document-mode leaf leaves the run
+     * {@code generating} — call {@see generateFlowDocument()} (or {@see processFlowRun()}, which
+     * chains it).
+     *
+     * @param array<string,mixed>        $fill
+     * @param array<string,RSAPublicKey> $partyPubKeys supply to skip the share_code → /api/keys lookup.
+     */
+    public function submitFlowAnswers(FlowRun $run, array $fill, array $partyPubKeys = []): FlowRun
+    {
+        $answersSoFar = $this->decryptRunAnswers($run);
+        $full = array_merge($answersSoFar, $fill);
+        $svcPub = $this->servicePublicKey();
+
+        $answersOut = [];
+        foreach ($fill as $slug => $val) {
+            $plain = is_string($val) ? $val : json_encode($val, JSON_THROW_ON_ERROR);
+            $values = [];
+            foreach ($run->bindings as $uid) {
+                $key = ($uid === $run->serviceUserId())
+                    ? $svcPub
+                    : $this->flowPersonPublicKey($run, $uid, $partyPubKeys);
+                $values[] = ['for_user_id' => $uid, 'value' => Crypto::encryptForPublicKey($plain, $key)];
+            }
+            $answersOut[] = ['slug' => $slug, 'values' => $values];
+        }
+
+        [$leaf, $nextNode] = self::computeNextNode($run->definition, $run->currentNode, $full);
+        $body = ['answers' => $answersOut];
+        if ($leaf) {
+            $body['leaf'] = true;
+        } else {
+            $body['next_node'] = $nextNode;
+            $body['next_party'] = self::partyOf($run->definition, $nextNode);
+        }
+        $res = $this->http->post(self::FLOW_RUNS . '/' . rawurlencode((string) $run->id) . '/answers', $body);
+        return FlowRun::fromApi(is_array($res) ? $res : []);
+    }
+
+    /**
+     * Document-mode company leaf: one-time-key value gather → POST /generate. Builds a random
+     * 32-byte AES-256-GCM key, encrypts {@code JSON([slug => plaintext])} of the company's decrypted
+     * answers, packs {@code iv(12) . ciphertext . tag(16)}, and POSTs {@code [otk, values]} (both
+     * base64). Returns the raw API response {@code [document_id, status]} (idempotent).
+     *
+     * @return array<string,mixed>|string
+     */
+    public function generateFlowDocument(FlowRun $run): array|string
+    {
+        $answers = $this->decryptRunAnswers($run);
+        $strMap = [];
+        foreach ($answers as $k => $v) {
+            $strMap[$k] = is_string($v) ? $v : json_encode($v, JSON_THROW_ON_ERROR);
+        }
+        $payload = json_encode($strMap, JSON_THROW_ON_ERROR);
+        $otk = random_bytes(32);
+        $iv = random_bytes(12);
+        $tag = '';
+        $ct = openssl_encrypt($payload, 'aes-256-gcm', $otk, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
+        if ($ct === false) {
+            throw new DecryptError('AES-256-GCM encryption failed for flow generate payload');
+        }
+        $blob = $iv . $ct . $tag; // iv(12) . ciphertext . tag(16)
+        $body = ['otk' => base64_encode($otk), 'values' => base64_encode($blob)];
+        return $this->http->post(self::FLOW_RUNS . '/' . rawurlencode((string) $run->id) . '/generate', $body);
+    }
+
+    /**
+     * High-level company turn: load → (if our turn) fill + advance + generate. {@code $fillNode} is
+     * {@code fn(array $node, array $answers): array} returning {@code [slug => value]}; the SDK
+     * encrypts per party, submits, and — if the submit landed on a document-mode leaf — calls
+     * {@see generateFlowDocument()}. Returns the latest {@see FlowRun}; when the run is not awaiting
+     * the company it is returned untouched.
+     *
+     * @param callable(array<string,mixed>, array<string,mixed>): (array<string,mixed>|null) $fillNode
+     * @param array<string,RSAPublicKey>                                                      $partyPubKeys
+     */
+    public function processFlowRun(string $runId, callable $fillNode, array $partyPubKeys = []): FlowRun
+    {
+        $run = $this->flowRun($runId);
+        $companyParty = $run->companyPartyKey();
+        if ($companyParty === null || $run->status !== 'awaiting_' . $companyParty) {
+            return $run; // not our turn (or company not bound)
+        }
+        $node = self::nodeByKey($run->definition, $run->currentNode);
+        if ($node === null) {
+            return $run;
+        }
+        $answers = $this->decryptRunAnswers($run);
+        $fill = $fillNode($node, $answers) ?? [];
+        $merged = array_merge($answers, $fill);
+        [$wasLeaf] = self::computeNextNode($run->definition, $run->currentNode, $merged);
+        $run = $this->submitFlowAnswers($run, $fill, $partyPubKeys);
+        $mode = $run->outputMode ?? (isset($run->definition['output_mode']) ? (string) $run->definition['output_mode'] : null);
+        if ($wasLeaf && $mode === 'document') {
+            $this->generateFlowDocument($run);
+            $run = $this->flowRun((string) $run->id);
+        }
+        return $run;
+    }
+
     // ── module-level helpers ──────────────────────────────────────────────────
 
     /**
@@ -866,5 +1085,68 @@ final class Client
     private static function dataUri(string $fileBytes, ?string $mime): string
     {
         return 'data:' . ($mime ?? 'application/octet-stream') . ';base64,' . base64_encode($fileBytes);
+    }
+
+    /**
+     * Look up a node by key in the pinned definition graph.
+     *
+     * @param array<string,mixed> $definition
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function nodeByKey(array $definition, ?string $key): ?array
+    {
+        $nodes = $definition['nodes'] ?? null;
+        if (!is_array($nodes)) {
+            return null;
+        }
+        foreach ($nodes as $n) {
+            if (is_array($n) && $key !== null && ($n['key'] ?? null) === $key) {
+                return $n;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The next node after {@code $fromKey} — ordered outgoing edges, first match wins. Leaf is true
+     * when there is no outgoing edge or none matched (a dead-end is a leaf, matching the platform).
+     *
+     * @param array<string,mixed> $definition
+     * @param array<string,mixed> $answers
+     *
+     * @return array{0: bool, 1: ?string} [leaf, nextNode]
+     */
+    private static function computeNextNode(array $definition, ?string $fromKey, array $answers): array
+    {
+        $edges = [];
+        if (is_array($definition['edges'] ?? null)) {
+            foreach ($definition['edges'] as $e) {
+                if (is_array($e) && $fromKey !== null && ($e['from'] ?? null) === $fromKey) {
+                    $edges[] = $e;
+                }
+            }
+        }
+        if ($edges === []) {
+            return [true, null];
+        }
+        usort($edges, static fn (array $a, array $b): int => ((float) ($a['sort'] ?? 0)) <=> ((float) ($b['sort'] ?? 0)));
+        foreach ($edges as $e) {
+            if (FlowCondition::evaluate($e['condition'] ?? null, $answers)) {
+                return [false, isset($e['to']) ? (string) $e['to'] : null];
+            }
+        }
+        return [true, null];
+    }
+
+    /**
+     * The party that owns {@code $nodeKey} in the definition.
+     *
+     * @param array<string,mixed> $definition
+     */
+    private static function partyOf(array $definition, ?string $nodeKey): ?string
+    {
+        $node = self::nodeByKey($definition, $nodeKey);
+        return $node !== null && isset($node['party']) ? (string) $node['party'] : null;
     }
 }
