@@ -7,6 +7,7 @@ namespace Allus\CompanyData\Tests;
 use Allus\CompanyData\Client;
 use Allus\CompanyData\Config;
 use Allus\CompanyData\Crypto\BinaryHandle;
+use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Http\Response;
@@ -625,6 +626,73 @@ final class ClientTest extends TestCase
         self::assertFalse($doc->requiresAcceptance);
         self::assertCount(1, $doc->signatures);
         self::assertSame('signed', $doc->signatures[0]['action']);
+    }
+
+    // ── connect requests (service-initiated; idea 2) ────────────────────────────
+
+    public function testSendConnectRequestPostsShareCodeAndReturnsRequestId(): void
+    {
+        $captured = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$captured): Response {
+            self::assertSame('POST', $method);
+            self::assertStringEndsWith('/company-data/connect-requests', $url);
+            $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
+            return FakeTransport::json(201, ['request_id' => 'req-1']);
+        };
+        [$client] = $this->clientRw($this->noGet(), $writeRouter);
+        self::assertSame('req-1', $client->sendConnectRequest('  ABC123 '));
+        self::assertSame(['share_code' => 'ABC123'], $captured['body']); // trimmed
+    }
+
+    public function testSendConnectRequestBlankThrowsConfigError(): void
+    {
+        [$client] = $this->clientRw($this->noGet(), function (string $method, string $url, ?string $body): Response {
+            throw new \AssertionError('should not write for a blank share code');
+        });
+        $this->expectException(ConfigError::class);
+        $client->sendConnectRequest('   ');
+    }
+
+    public function testSendConnectRequestMissingIdThrowsApiError(): void
+    {
+        [$client] = $this->clientRw(
+            $this->noGet(),
+            fn (string $method, string $url, ?string $body): Response => FakeTransport::json(201, []),
+        );
+        $this->expectException(ApiError::class);
+        $client->sendConnectRequest('ABC123');
+    }
+
+    public function testChangeConnectRequestOutcomeEventsCarryRequestId(): void
+    {
+        $type = fn (string $s): ?string => null;
+        $dec = fn (array|string $w): string => '';
+
+        $accepted = Change::fromApi(
+            ['id' => 'c1', 'event' => 'connection_request_accepted', 'request_id' => 'req-9',
+             'person_user_id' => 'person-1', 'share_code' => 'P1CODE', 'at' => '2026-06-23T10:00:00Z'],
+            $type, $dec,
+        );
+        self::assertSame('connection_request_accepted', $accepted->event);
+        self::assertSame('req-9', $accepted->requestId);
+        self::assertSame('person-1', $accepted->personId);
+        self::assertSame('P1CODE', $accepted->shareCode);
+        self::assertNull($accepted->slug);
+        self::assertNull($accepted->value);
+
+        $rejected = Change::fromApi(
+            ['id' => 'c2', 'event' => 'connection_request_rejected', 'request_id' => 'req-8',
+             'person_user_id' => 'person-2'],
+            $type, $dec,
+        );
+        self::assertSame('connection_request_rejected', $rejected->event);
+        self::assertSame('req-8', $rejected->requestId);
+
+        $created = Change::fromApi(
+            ['id' => 'c3', 'event' => 'connection_created', 'person_user_id' => 'person-3'],
+            $type, $dec,
+        );
+        self::assertNull($created->requestId); // unrelated event
     }
 
     private static function rmrf(string $dir): void
