@@ -68,6 +68,7 @@ final class Client
     private const REQUEST_FIELDS = self::BASE . '/request-fields';
     private const LOGS = self::BASE . '/logs';
     private const DOCUMENTS = self::BASE . '/documents';
+    private const CONNECT_REQUESTS = self::BASE . '/connect-requests';
     private const FLOWS = self::BASE . '/flows';          // POST /flows/{flowId}/runs
     private const FLOW_RUNS = self::BASE . '/flow-runs';  // list / get / answers / generate
     private const KEYS = '/api/keys';
@@ -795,6 +796,34 @@ final class Client
     public function deleteDocument(string $documentId): void
     {
         $this->http->delete(self::DOCUMENTS . '/' . rawurlencode($documentId));
+    }
+
+    // ── connect requests (service-initiated; idea 2) ────────────────────────────
+
+    /**
+     * Invite a person (by their share code) to connect to THIS service.
+     *
+     * Wraps POST /api/company-data/connect-requests — auto-scoped to the calling client's
+     * service. Fire-and-forget: the person accepts or rejects, and the outcome reaches you
+     * only via the change feed / webhooks (connection_request_accepted /
+     * connection_request_rejected). No crypto, no key handling (the request carries no values).
+     * Returns the new request_id.
+     *
+     * @throws ConfigError when the share code is blank.
+     * @throws ApiError when the API returns no request_id.
+     */
+    public function sendConnectRequest(string $shareCode): string
+    {
+        $code = trim($shareCode);
+        if ($code === '') {
+            throw new ConfigError('shareCode is required');
+        }
+        $body = $this->http->post(self::CONNECT_REQUESTS, ['share_code' => $code]);
+        $rid = is_array($body) ? ($body['request_id'] ?? null) : null;
+        if (!$rid) {
+            throw new ApiError(0, 'company_connections.request_failed', 'no request_id in response');
+        }
+        return (string) $rid;
     }
 
     // ── contract-flow runs (company side — the company is a bound party) ─────────
