@@ -451,7 +451,7 @@ final class ClientTest extends TestCase
         ]);
     }
 
-    public function testCreateDocumentFileBroadcastUploadsRawBytes(): void
+    public function testCreateDocumentFileBroadcastUploadsFileDataUri(): void
     {
         $calls = [];
         $writeRouter = function (string $method, string $url, ?string $body) use (&$calls): Response {
@@ -474,10 +474,14 @@ final class ClientTest extends TestCase
         self::assertStringEndsWith('/documents', $calls[0]['url']);
         self::assertNull(json_decode((string) $calls[0]['body'], true, flags: JSON_THROW_ON_ERROR)['target']);
         self::assertStringEndsWith('/documents/f1/file', $calls[1]['url']);
-        self::assertSame('%PDF-1.4 x', $calls[1]['body']); // raw plaintext bytes
+        // Broadcast /file body is JSON {"file": "<data URI>", "original_name"} — NOT raw bytes.
+        $up = json_decode((string) $calls[1]['body'], true, flags: JSON_THROW_ON_ERROR);
+        self::assertStringStartsWith('data:application/pdf;base64,', $up['file']);
+        self::assertSame('%PDF-1.4 x', base64_decode(explode(',', $up['file'], 2)[1], true));
+        self::assertSame('C', $up['original_name']);
     }
 
-    public function testCreateDocumentFilePerPersonUploadsWrapperBytes(): void
+    public function testCreateDocumentFilePerPersonUploadsValueWrapper(): void
     {
         $spki = Vector::publicSpkiB64();
         $calls = [];
@@ -502,8 +506,11 @@ final class ClientTest extends TestCase
         ]);
         $upload = $calls[1]['body'];
         self::assertIsString($upload);
-        $wrapper = json_decode($upload, true, flags: JSON_THROW_ON_ERROR);
-        self::assertSame(1, $wrapper['_enc']); // ciphertext wrapper bytes, not the raw file
+        // Per-person /file body is JSON {"value": "<wrapper JSON string>"}, not the bare wrapper.
+        $outer = json_decode($upload, true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsString($outer['value']);
+        $wrapper = json_decode($outer['value'], true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(1, $wrapper['_enc']); // ciphertext wrapper, not the raw file
         // decrypt → the {"file":"data:...base64,..."} envelope holding the original bytes
         $env = json_decode(Crypto::decrypt($wrapper, Vector::privateKey()), true, flags: JSON_THROW_ON_ERROR);
         self::assertStringStartsWith('data:application/pdf;base64,', $env['file']);
