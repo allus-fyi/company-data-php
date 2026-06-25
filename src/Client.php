@@ -702,22 +702,20 @@ final class Client
         $doc = Document::fromApi(self::docObj($created), fn (array|string $w): string => $this->decryptValue($w));
         $fileUrl = self::DOCUMENTS . '/' . rawurlencode((string) $doc->id) . '/file';
         if ($perPerson) {
-            // Encrypt the file bytes (EVERY per-person doc): wrap the file envelope
-            // string, then send the wrapper as bytes.
+            // EVERY per-person file doc is E2E-encrypted: wrap the file envelope string,
+            // encrypt it for the recipient, then POST {"value": "<wrapper JSON string>"}.
+            // The /file endpoint requires `value` to be a STRING (isValidEncryptedBlob),
+            // so the wrapper array is json_encode'd; the bare wrapper was rejected (400).
             $envelope = json_encode(['file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null)], JSON_THROW_ON_ERROR);
             $wrapper = Crypto::encryptForPublicKey($envelope, $pubkey);
-            $this->http->post(
-                $fileUrl,
-                rawBody: json_encode($wrapper, JSON_THROW_ON_ERROR),
-                contentType: 'application/json',
-            );
+            $this->http->post($fileUrl, ['value' => json_encode($wrapper, JSON_THROW_ON_ERROR)]);
         } else {
-            // Broadcast — raw plaintext bytes.
-            $this->http->post(
-                $fileUrl,
-                rawBody: $fileBytes,
-                contentType: is_string($fileMime) && $fileMime !== '' ? $fileMime : 'application/octet-stream',
-            );
+            // Broadcast — plaintext: POST {"file": "<base64 data URI>", "original_name"}.
+            // The API rejected the old raw-bytes body (documents.invalid_payload: file required).
+            $this->http->post($fileUrl, [
+                'file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null),
+                'original_name' => $name,
+            ]);
         }
         return $doc;
     }
