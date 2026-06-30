@@ -599,7 +599,7 @@ final class Client
      *     kind?: string, name: string, payload_kind: string, is_private?: bool,
      *     description?: ?string, connection_id?: ?string, person_user_id?: ?string,
      *     share_code?: ?string, json_value?: mixed, file_bytes?: ?string,
-     *     file_mime?: ?string, requires_signature?: bool, requires_acceptance?: bool,
+     *     file_mime?: ?string, file_name?: ?string, requires_signature?: bool, requires_acceptance?: bool,
      *     metadata?: ?array<string,mixed>, status?: ?string
      * } $opts
      *
@@ -618,6 +618,7 @@ final class Client
         $jsonValue = $opts['json_value'] ?? null;
         $fileBytes = $opts['file_bytes'] ?? null;
         $fileMime = $opts['file_mime'] ?? null;
+        $fileName = $opts['file_name'] ?? null;
         $requiresSignature = (bool) ($opts['requires_signature'] ?? false);
         $requiresAcceptance = (bool) ($opts['requires_acceptance'] ?? false);
         $metadata = $opts['metadata'] ?? null;
@@ -714,7 +715,11 @@ final class Client
             // The API rejected the old raw-bytes body (documents.invalid_payload: file required).
             $this->http->post($fileUrl, [
                 'file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null),
-                'original_name' => $name,
+                'original_name' => self::broadcastOriginalName(
+                    is_string($fileName) ? $fileName : null,
+                    $name,
+                    is_string($fileMime) ? $fileMime : null,
+                ),
             ]);
         }
         return $doc;
@@ -1112,6 +1117,41 @@ final class Client
     private static function dataUri(string $fileBytes, ?string $mime): string
     {
         return 'data:' . ($mime ?? 'application/octet-stream') . ';base64,' . base64_encode($fileBytes);
+    }
+
+    /** Allowed broadcast-document MIME → file extension (mirrors the API's allowlist). */
+    private const MIME_EXT = [
+        'application/pdf' => 'pdf',
+        'application/msword' => 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        'image/png' => 'png',
+        'image/jpeg' => 'jpg',
+    ];
+
+    /** Document file extensions the API accepts (mirrors its allowlist). */
+    private const ALLOWED_DOC_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg'];
+
+    /**
+     * {@code original_name} for a broadcast file upload. The API validates its
+     * extension against an allowlist, but {@code name} is a human label that often
+     * has no extension. Use an explicit {@code fileName}; else keep {@code name} if
+     * it already ends in an allowed extension; else append the extension derived
+     * from {@code fileMime} (so {@code "Price list"} + {@code application/pdf} →
+     * {@code "Price list.pdf"}).
+     */
+    private static function broadcastOriginalName(?string $fileName, string $name, ?string $fileMime): string
+    {
+        if ($fileName !== null && $fileName !== '') {
+            return $fileName;
+        }
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if (in_array($ext, self::ALLOWED_DOC_EXTS, true)) {
+            return $name;
+        }
+        $derived = self::MIME_EXT[strtolower($fileMime ?? '')] ?? null;
+        return $derived !== null ? "{$name}.{$derived}" : $name;
     }
 
     /**

@@ -478,7 +478,64 @@ final class ClientTest extends TestCase
         $up = json_decode((string) $calls[1]['body'], true, flags: JSON_THROW_ON_ERROR);
         self::assertStringStartsWith('data:application/pdf;base64,', $up['file']);
         self::assertSame('%PDF-1.4 x', base64_decode(explode(',', $up['file'], 2)[1], true));
-        self::assertSame('C', $up['original_name']);
+        // The human label "C" has no extension; original_name gets the mime-derived extension
+        // so the API's extension allowlist accepts it (documents.bad_mime otherwise).
+        self::assertSame('C.pdf', $up['original_name']);
+    }
+
+    /** A {@code name} already ending in an allowed extension is sent unchanged (no "x.pdf.pdf"). */
+    public function testCreateDocumentFileBroadcastKeepsExistingExtension(): void
+    {
+        $up = $this->broadcastUpload(['name' => 'report.pdf', 'file_mime' => 'application/pdf']);
+        self::assertSame('report.pdf', $up['original_name']);
+    }
+
+    /** An extensionless {@code name} derives its extension from {@code file_mime}. */
+    public function testCreateDocumentFileBroadcastDerivesExtensionFromMime(): void
+    {
+        $up = $this->broadcastUpload(['name' => 'Price list', 'file_mime' => 'image/jpeg']);
+        self::assertSame('Price list.jpg', $up['original_name']);
+    }
+
+    /** An explicit {@code file_name} overrides both {@code name} and the mime-derived value. */
+    public function testCreateDocumentFileBroadcastExplicitFileNameOverrides(): void
+    {
+        $up = $this->broadcastUpload([
+            'name' => 'Price list', 'file_mime' => 'application/pdf', 'file_name' => 'prices.pdf',
+        ]);
+        self::assertSame('prices.pdf', $up['original_name']);
+    }
+
+    /**
+     * Run a broadcast file createDocument with the given option overrides and return
+     * the decoded JSON body POSTed to the /{id}/file endpoint.
+     *
+     * @param array<string,mixed> $opts
+     *
+     * @return array<string,mixed>
+     */
+    private function broadcastUpload(array $opts): array
+    {
+        $calls = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$calls): Response {
+            $calls[] = ['url' => $url, 'body' => $body];
+            if (str_ends_with($url, '/documents')) {
+                return FakeTransport::json(201, [
+                    'id' => 'f1', 'kind' => 'document', 'name' => 'C', 'description' => null,
+                    'status' => 'active', 'payload_kind' => 'file', 'is_private' => false,
+                    'value' => ['_pending' => true], 'metadata' => null,
+                    'created_at' => null, 'updated_at' => null,
+                ]);
+            }
+            return FakeTransport::json(200, ['id' => 'f1']);
+        };
+        [$client] = $this->clientRw($this->noGet(), $writeRouter);
+        $client->createDocument(array_merge(
+            ['payload_kind' => 'file', 'file_bytes' => '%PDF-1.4 x'],
+            $opts,
+        ));
+
+        return json_decode((string) $calls[1]['body'], true, flags: JSON_THROW_ON_ERROR);
     }
 
     public function testCreateDocumentFilePerPersonUploadsValueWrapper(): void
