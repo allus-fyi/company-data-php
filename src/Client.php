@@ -639,6 +639,9 @@ final class Client
             $target = ['connection_id' => $connectionId];
         } elseif (is_string($personUserId) && $personUserId !== '') {
             $target = ['person_user_id' => $personUserId];
+        } elseif (is_string($shareCode) && $shareCode !== '') {
+            // A share_code target is PER-PERSON (encrypted to that recipient), not a broadcast.
+            $target = ['share_code' => $shareCode];
         }
         // (else: broadcast — target stays null)
 
