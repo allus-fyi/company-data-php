@@ -761,7 +761,18 @@ final class ClientTest extends TestCase
         self::assertSame('signed', $chg->action);
         self::assertSame('doc-7', $chg->documentId);
         self::assertSame('active', $chg->status);
+        self::assertNull($chg->note); // no note on a signed event
         self::assertNull($chg->slug);
+
+        $cancelled = Change::fromApi(
+            ['id' => 'chg-cancel', 'event' => 'document_status_changed', 'person_user_id' => 'u-3',
+             'action' => 'cancelled', 'note' => 'Too expensive', 'document_id' => 'doc-8', 'status' => 'ended',
+             'at' => '2026-06-22T11:00:00Z'],
+            fn (string $s): ?string => null,
+            fn (array|string $w): string => '',
+        );
+        self::assertSame('cancelled', $cancelled->action);
+        self::assertSame('Too expensive', $cancelled->note);
     }
 
     public function testDocumentModelCarriesContractFlagsAndSignatures(): void

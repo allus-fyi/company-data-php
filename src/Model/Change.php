@@ -14,7 +14,7 @@ use Allus\CompanyData\Crypto\BinaryHandle;
  * updatedAt on a change). {@see $shareCode} is the person's profile share code,
  * present on every event (may be null). {@see $slug}/{@see $value}/{@see $live}
  * are present only on {@code field_updated} (connection/consent events carry no
- * slot/value). {@see $documentId}/{@see $status} are set on
+ * slot/value). {@see $documentId}/{@see $status}/{@see $note} are set on
  * {@code document_status_changed}.
  */
 final class Change
@@ -38,6 +38,8 @@ final class Change
         public readonly ?string $status = null,
         /** Set on document_status_changed for a contract: signed | accepted | cancelled. */
         public readonly ?string $action = null,
+        /** Set on document_status_changed: the person's optional cancellation note. */
+        public readonly ?string $note = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
         public readonly ?\DateTimeImmutable $at = null,
@@ -85,6 +87,7 @@ final class Change
             documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
             status: ($event === 'document_status_changed' && isset($obj['status'])) ? (string) $obj['status'] : null,
             action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,
+            note: ($event === 'document_status_changed' && isset($obj['note'])) ? (string) $obj['note'] : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
             at: Coerce::dateTime($obj['at'] ?? null),
