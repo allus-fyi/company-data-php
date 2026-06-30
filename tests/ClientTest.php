@@ -574,6 +574,53 @@ final class ClientTest extends TestCase
         self::assertSame('hello-bytes', base64_decode(explode(',', $env['file'], 2)[1], true));
     }
 
+    /**
+     * A failed /file upload best-effort deletes the just-created (still
+     * {"_pending": true}) document and re-throws the ORIGINAL upload error, so a
+     * failed createDocument leaves no dangling document behind (issue #27).
+     */
+    public function testCreateDocumentFileUploadFailureDeletesCreatedDoc(): void
+    {
+        $calls = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$calls): Response {
+            $calls[] = ['method' => $method, 'url' => $url];
+            if (str_ends_with($url, '/documents')) {
+                return FakeTransport::json(201, [
+                    'id' => 'f9', 'kind' => 'document', 'name' => 'C', 'description' => null,
+                    'status' => 'active', 'payload_kind' => 'file', 'is_private' => false,
+                    'value' => ['_pending' => true], 'metadata' => null,
+                    'created_at' => null, 'updated_at' => null,
+                ]);
+            }
+            if (str_ends_with($url, '/documents/f9/file')) {
+                // The byte upload fails.
+                return FakeTransport::json(500, ['error_key' => 'documents.upload_failed']);
+            }
+            // The best-effort cleanup DELETE.
+            self::assertSame('DELETE', $method);
+            self::assertStringEndsWith('/documents/f9', $url);
+            return FakeTransport::json(200, []);
+        };
+        [$client] = $this->clientRw($this->noGet(), $writeRouter);
+
+        try {
+            $client->createDocument([
+                'name' => 'C', 'payload_kind' => 'file', 'file_bytes' => '%PDF-1.4 x',
+                'file_mime' => 'application/pdf',
+            ]);
+            self::fail('expected the upload error to propagate');
+        } catch (ApiError $e) {
+            self::assertSame('documents.upload_failed', $e->errorKey);
+        }
+
+        // create POST → /file upload (failed) → cleanup DELETE on /documents/f9.
+        $methods = array_map(fn ($c) => [$c['method'], $c['url']], $calls);
+        self::assertNotEmpty(array_filter(
+            $methods,
+            fn ($m) => $m[0] === 'DELETE' && str_ends_with($m[1], '/documents/f9'),
+        ));
+    }
+
     public function testDocumentVerbsHitRightPath(): void
     {
         $seen = [];
