@@ -702,25 +702,38 @@ final class Client
         $created = $this->http->post(self::DOCUMENTS, $body);
         $doc = Document::fromApi(self::docObj($created), fn (array|string $w): string => $this->decryptValue($w));
         $fileUrl = self::DOCUMENTS . '/' . rawurlencode((string) $doc->id) . '/file';
-        if ($perPerson) {
-            // EVERY per-person file doc is E2E-encrypted: wrap the file envelope string,
-            // encrypt it for the recipient, then POST {"value": "<wrapper JSON string>"}.
-            // The /file endpoint requires `value` to be a STRING (isValidEncryptedBlob),
-            // so the wrapper array is json_encode'd; the bare wrapper was rejected (400).
-            $envelope = json_encode(['file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null)], JSON_THROW_ON_ERROR);
-            $wrapper = Crypto::encryptForPublicKey($envelope, $pubkey);
-            $this->http->post($fileUrl, ['value' => json_encode($wrapper, JSON_THROW_ON_ERROR)]);
-        } else {
-            // Broadcast — plaintext: POST {"file": "<base64 data URI>", "original_name"}.
-            // The API rejected the old raw-bytes body (documents.invalid_payload: file required).
-            $this->http->post($fileUrl, [
-                'file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null),
-                'original_name' => self::broadcastOriginalName(
-                    is_string($fileName) ? $fileName : null,
-                    $name,
-                    is_string($fileMime) ? $fileMime : null,
-                ),
-            ]);
+        // The metadata row exists before the bytes are uploaded; if the upload
+        // fails, best-effort delete it so a failed createDocument leaves no
+        // dangling {"_pending": true} document. Cleanup errors are swallowed and
+        // the ORIGINAL upload error is re-thrown.
+        try {
+            if ($perPerson) {
+                // EVERY per-person file doc is E2E-encrypted: wrap the file envelope string,
+                // encrypt it for the recipient, then POST {"value": "<wrapper JSON string>"}.
+                // The /file endpoint requires `value` to be a STRING (isValidEncryptedBlob),
+                // so the wrapper array is json_encode'd; the bare wrapper was rejected (400).
+                $envelope = json_encode(['file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null)], JSON_THROW_ON_ERROR);
+                $wrapper = Crypto::encryptForPublicKey($envelope, $pubkey);
+                $this->http->post($fileUrl, ['value' => json_encode($wrapper, JSON_THROW_ON_ERROR)]);
+            } else {
+                // Broadcast — plaintext: POST {"file": "<base64 data URI>", "original_name"}.
+                // The API rejected the old raw-bytes body (documents.invalid_payload: file required).
+                $this->http->post($fileUrl, [
+                    'file' => self::dataUri($fileBytes, is_string($fileMime) ? $fileMime : null),
+                    'original_name' => self::broadcastOriginalName(
+                        is_string($fileName) ? $fileName : null,
+                        $name,
+                        is_string($fileMime) ? $fileMime : null,
+                    ),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            try {
+                $this->deleteDocument((string) $doc->id);
+            } catch (\Throwable $ignored) {
+                // swallow cleanup errors
+            }
+            throw $e;
         }
         return $doc;
     }
