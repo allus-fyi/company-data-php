@@ -423,6 +423,45 @@ final class ClientTest extends TestCase
         }
     }
 
+    public function testCreateDocumentShareCodeOnlyIsPerPersonEncrypted(): void
+    {
+        // A share_code-only target (no connection_id / person_user_id) must be
+        // PER-PERSON (encrypted to that recipient), NOT a plaintext broadcast (issue #29).
+        $spki = Vector::publicSpkiB64();
+        $keysFetched = 0;
+        $getRouter = function (string $url, ?array $q) use ($spki, &$keysFetched): Response {
+            self::assertStringEndsWith('/api/keys/ABC123', $url); // recipient key fetched by share_code
+            $keysFetched++;
+            return FakeTransport::json(200, ['public_key' => $spki]);
+        };
+        $captured = [];
+        $writeRouter = function (string $method, string $url, ?string $body) use (&$captured): Response {
+            $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
+            return FakeTransport::json(201, [
+                'id' => 'd3', 'kind' => 'document', 'name' => 'SC', 'description' => null,
+                'status' => 'active', 'payload_kind' => 'json', 'is_private' => false,
+                'value' => $captured['body']['value'], 'metadata' => null,
+                'created_at' => null, 'updated_at' => null,
+            ]);
+        };
+        [$client] = $this->clientRw($getRouter, $writeRouter);
+        $doc = $client->createDocument([
+            'name' => 'SC', 'payload_kind' => 'json', 'json_value' => ['plan' => 'pro'],
+            'share_code' => 'ABC123',
+        ]);
+        self::assertSame(1, $keysFetched);                                    // (a) recipient key fetched
+        self::assertSame(['share_code' => 'ABC123'], $captured['body']['target']); // (b) per-person target, not null/broadcast
+        $val = $captured['body']['value'];
+        self::assertIsArray($val);
+        self::assertSame(1, $val['_enc']);                                    // (c) encrypted wrapper, not plaintext
+        self::assertArrayHasKey('k', $val);
+        self::assertArrayHasKey('iv', $val);
+        self::assertArrayHasKey('d', $val);
+        $plain = Crypto::decrypt($val, Vector::privateKey());
+        self::assertSame(['plan' => 'pro'], json_decode($plain, true, flags: JSON_THROW_ON_ERROR));
+        self::assertSame('d3', $doc->id);
+    }
+
     public function testCreateDocumentPrivateBroadcastRaises(): void
     {
         [$client] = $this->clientRw($this->noGet(), fn (string $m, string $u, ?string $b): Response => FakeTransport::json(200, []));
