@@ -40,6 +40,12 @@ final class Change
         public readonly ?string $action = null,
         /** Set on document_status_changed: the person's optional cancellation note. */
         public readonly ?string $note = null,
+        /** Set on a signature: biometric | twofa | email | custodian. */
+        public readonly ?string $method = null,
+        /** Set on a signature: SHA-256 of the signed content. */
+        public readonly ?string $contentSha256 = null,
+        /** Set on a signature: ISO timestamp the signature was recorded. */
+        public readonly ?string $signedAt = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
         public readonly ?\DateTimeImmutable $at = null,
@@ -88,6 +94,9 @@ final class Change
             status: ($event === 'document_status_changed' && isset($obj['status'])) ? (string) $obj['status'] : null,
             action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,
             note: ($event === 'document_status_changed' && isset($obj['note'])) ? (string) $obj['note'] : null,
+            method: ($event === 'document_status_changed' && isset($obj['method'])) ? (string) $obj['method'] : null,
+            contentSha256: ($event === 'document_status_changed' && isset($obj['content_sha256'])) ? (string) $obj['content_sha256'] : null,
+            signedAt: ($event === 'document_status_changed' && isset($obj['signed_at'])) ? (string) $obj['signed_at'] : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
             at: Coerce::dateTime($obj['at'] ?? null),
