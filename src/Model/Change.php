@@ -46,6 +46,8 @@ final class Change
         public readonly ?string $contentSha256 = null,
         /** Set on a signature: ISO timestamp the signature was recorded. */
         public readonly ?string $signedAt = null,
+        /** Set on a cancelled document_status_changed: ISO date the cancellation takes effect. */
+        public readonly ?string $cancelEffectiveDate = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
         public readonly ?\DateTimeImmutable $at = null,
@@ -97,6 +99,7 @@ final class Change
             method: ($event === 'document_status_changed' && isset($obj['method'])) ? (string) $obj['method'] : null,
             contentSha256: ($event === 'document_status_changed' && isset($obj['content_sha256'])) ? (string) $obj['content_sha256'] : null,
             signedAt: ($event === 'document_status_changed' && isset($obj['signed_at'])) ? (string) $obj['signed_at'] : null,
+            cancelEffectiveDate: ($event === 'document_status_changed' && isset($obj['cancel_effective_date'])) ? (string) $obj['cancel_effective_date'] : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
             at: Coerce::dateTime($obj['at'] ?? null),
