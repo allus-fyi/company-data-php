@@ -15,6 +15,9 @@ namespace Allus\CompanyData\Model;
  *
  * {@see $answers} is the raw list of {@code {slug, for_user_id, value}} rows; the client decrypts
  * the company's copies on demand.
+ *
+ * {@see $referenceDate} is the run's pinned "today" (YYYY-MM-DD), used when computing flow
+ * constants; null when the API does not carry one.
  */
 final class FlowRun
 {
@@ -36,6 +39,7 @@ final class FlowRun
         public readonly ?string $currentNode,
         public readonly ?string $documentId,
         public readonly ?string $outputMode,
+        public readonly ?string $referenceDate,
         public readonly array $definition,
         public readonly array $answers,
         public readonly ?\DateTimeImmutable $createdAt,
@@ -111,6 +115,7 @@ final class FlowRun
             currentNode: isset($obj['current_node']) ? (string) $obj['current_node'] : null,
             documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
             outputMode: $outputMode,
+            referenceDate: isset($obj['reference_date']) ? (string) $obj['reference_date'] : null,
             definition: $definition,
             answers: $answers,
             createdAt: Coerce::dateTime($obj['created_at'] ?? null),
