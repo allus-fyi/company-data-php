@@ -44,6 +44,6 @@ final class FlowConditionTest extends TestCase
 
     public function testVectorHasAllCases(): void
     {
-        self::assertCount(27, self::cases());
+        self::assertCount(35, self::cases());
     }
 }

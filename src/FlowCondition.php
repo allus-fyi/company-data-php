@@ -61,6 +61,12 @@ final class FlowCondition
                 return self::inList($target, $val);
             case 'nin':
                 return !self::inList($target, $val);
+            // #102 substring ops (text): contains needs an answer (like in); not_contains is
+            // true when unanswered (like nin). Case-sensitive; empty needle counts as contained.
+            case 'contains':
+                return self::answered($val) && str_contains(self::str($val), self::str($target));
+            case 'not_contains':
+                return !(self::answered($val) && str_contains(self::str($val), self::str($target)));
         }
 
         if (!self::answered($val)) {
