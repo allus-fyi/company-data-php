@@ -37,6 +37,8 @@ final class Config
         'clientSecret' => 'ALLUS_CLIENT_SECRET',
         'servicePrivateKey' => 'ALLUS_SERVICE_PRIVATE_KEY',
         'keyPassphrase' => 'ALLUS_KEY_PASSPHRASE',
+        'customerClientId' => 'ALLUS_CUSTOMER_CLIENT_ID',
+        'customerClientSecret' => 'ALLUS_CUSTOMER_CLIENT_SECRET',
         'accountPrivateKey' => 'ALLUS_ACCOUNT_PRIVATE_KEY',
         'accountPassphrase' => 'ALLUS_ACCOUNT_PASSPHRASE',
         'cacheDir' => 'ALLUS_CACHE_DIR',
@@ -56,6 +58,8 @@ final class Config
         'clientSecret' => 'client_secret',
         'servicePrivateKey' => 'service_private_key',
         'keyPassphrase' => 'key_passphrase',
+        'customerClientId' => 'customer_client_id',
+        'customerClientSecret' => 'customer_client_secret',
         'accountPrivateKey' => 'account_private_key',
         'accountPassphrase' => 'account_passphrase',
         'cacheDir' => 'cache_dir',
@@ -74,6 +78,14 @@ final class Config
         'keyPassphrase',
     ];
 
+    /** Customer role (#168): the acct_* pair + account key (the decrypt key). */
+    private const REQUIRED_CUSTOMER = [
+        'apiUrl',
+        'customerClientId',
+        'customerClientSecret',
+        'accountPrivateKey',
+    ];
+
     private const VALID_FORMATS = ['json', 'xml'];
 
     /**
@@ -84,10 +96,12 @@ final class Config
      */
     public function __construct(
         public readonly string $apiUrl,
-        public readonly string $clientId,
-        public readonly string $clientSecret,
-        public readonly string $servicePrivateKey,
-        public readonly string $keyPassphrase,
+        public readonly ?string $clientId = null,
+        public readonly ?string $clientSecret = null,
+        public readonly ?string $servicePrivateKey = null,
+        public readonly ?string $keyPassphrase = null,
+        public readonly ?string $customerClientId = null,
+        public readonly ?string $customerClientSecret = null,
         public readonly ?string $accountPrivateKey = null,
         public readonly ?string $accountPassphrase = null,
         public readonly array $webhooks = [],
@@ -134,11 +148,39 @@ final class Config
     }
 
     /**
+     * Load a CUSTOMER-role config (#168) from a JSON file — requires the acct_*
+     * pair + account key, not the service PEM. Env vars override file values.
+     */
+    public static function fromCustomerFile(string $path): self
+    {
+        $raw = @file_get_contents($path);
+        if ($raw === false) {
+            throw new ConfigError("config file not found: {$path}");
+        }
+        try {
+            $data = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new ConfigError("config file is not valid JSON: {$path}: {$e->getMessage()}");
+        }
+        if (!is_array($data) || array_is_list($data)) {
+            throw new ConfigError("config file must be a JSON object: {$path}");
+        }
+        /** @var array<string,mixed> $data */
+        return self::build($data, 'customer');
+    }
+
+    /** Build a CUSTOMER-role config entirely from {@code ALLUS_*} env vars. */
+    public static function fromCustomerEnv(): self
+    {
+        return self::build([], 'customer');
+    }
+
+    /**
      * Merge file values with env overrides, validate, and construct.
      *
      * @param array<string,mixed> $data
      */
-    private static function build(array $data): self
+    private static function build(array $data, string $role = 'service'): self
     {
         $values = [];
 
@@ -251,7 +293,8 @@ final class Config
 
         // Required fields (fail fast).
         $missing = [];
-        foreach (self::REQUIRED as $name) {
+        $required = $role === 'customer' ? self::REQUIRED_CUSTOMER : self::REQUIRED;
+        foreach ($required as $name) {
             $v = $values[$name] ?? null;
             if ($v === null || $v === '') {
                 $missing[] = self::JSON_KEY[$name];
@@ -274,10 +317,12 @@ final class Config
 
         return new self(
             apiUrl: (string) $values['apiUrl'],
-            clientId: (string) $values['clientId'],
-            clientSecret: (string) $values['clientSecret'],
-            servicePrivateKey: (string) $values['servicePrivateKey'],
-            keyPassphrase: (string) $values['keyPassphrase'],
+            clientId: isset($values['clientId']) ? (string) $values['clientId'] : null,
+            clientSecret: isset($values['clientSecret']) ? (string) $values['clientSecret'] : null,
+            servicePrivateKey: isset($values['servicePrivateKey']) ? (string) $values['servicePrivateKey'] : null,
+            keyPassphrase: isset($values['keyPassphrase']) ? (string) $values['keyPassphrase'] : null,
+            customerClientId: isset($values['customerClientId']) ? (string) $values['customerClientId'] : null,
+            customerClientSecret: isset($values['customerClientSecret']) ? (string) $values['customerClientSecret'] : null,
             accountPrivateKey: isset($values['accountPrivateKey']) ? (string) $values['accountPrivateKey'] : null,
             accountPassphrase: isset($values['accountPassphrase']) ? (string) $values['accountPassphrase'] : null,
             webhooks: $webhooks,

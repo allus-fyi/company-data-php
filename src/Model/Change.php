@@ -29,6 +29,8 @@ final class Change
         public readonly ?string $personId,
         /** The person's profile share code (every event; may be null). */
         public readonly ?string $shareCode = null,
+        /** The customer's TYPE: "person"|"company" (B2B, #163); null on older API. */
+        public readonly ?string $customerType = null,
         public readonly ?string $slug = null,
         public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value = null,
         public readonly ?bool $live = null,
@@ -89,6 +91,7 @@ final class Change
             event: $event,
             personId: $personId !== null ? (string) $personId : null,
             shareCode: isset($obj['share_code']) ? (string) $obj['share_code'] : null,
+            customerType: isset($obj['customer_type']) ? (string) $obj['customer_type'] : null,
             slug: $slug,
             value: $value,
             live: $live,

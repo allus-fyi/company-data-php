@@ -21,6 +21,10 @@ final class Connection
         public readonly ?string $displayName,
         public readonly ?\DateTimeImmutable $connectedAt,
         public readonly array $values = [],
+        /** The connected customer's TYPE: "person"|"company" (B2B, #163); null on older API. */
+        public readonly ?string $customerType = null,
+        /** The customer's profile share code (previously only via {@see $raw}); null when absent. */
+        public readonly ?string $shareCode = null,
         public readonly array $raw = [],
     ) {
     }
@@ -77,6 +81,10 @@ final class Connection
             displayName: $displayName !== null ? (string) $displayName : null,
             connectedAt: $connectedAt,
             values: $values,
+            customerType: isset($obj['customer_type']) ? (string) $obj['customer_type']
+                : (isset($identity['customer_type']) ? (string) $identity['customer_type'] : null),
+            shareCode: isset($obj['share_code']) ? (string) $obj['share_code']
+                : (isset($identity['share_code']) ? (string) $identity['share_code'] : null),
             raw: $obj,
         );
     }

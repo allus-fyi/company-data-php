@@ -278,4 +278,48 @@ final class ModelsTest extends TestCase
         self::assertSame('ABC123', $changes[0]->shareCode);
         self::assertNull($changes[1]->shareCode);
     }
+
+    public function testRequestFieldIncludesAudience(): void
+    {
+        // B2B (#163): a request row carries its audience; absent -> null.
+        $body = ['request_fields' => [
+            ['slug' => 'billing', 'label' => 'Billing', 'type' => 'email', 'audience' => 'company'],
+            ['slug' => 'ref', 'label' => 'Ref', 'type' => 'text'],
+        ]];
+        $fields = RequestField::listFromApi($body);
+        self::assertSame('company', $fields[0]->audience);
+        self::assertNull($fields[1]->audience);
+    }
+
+    public function testChangeIncludesCustomerType(): void
+    {
+        // B2B (#163): a change event carries customer_type; absent -> null.
+        $body = ['changes' => [
+            ['id' => 'chg-1', 'event' => 'connection_created',
+             'person_user_id' => 'co-1', 'customer_type' => 'company', 'at' => '2026-07-07T12:00:00Z'],
+            ['id' => 'chg-2', 'event' => 'connection_created',
+             'person_user_id' => 'person-2', 'at' => '2026-07-07T12:00:00Z'],
+        ]];
+        $changes = Change::listFromApi($body, fn (string $s): ?string => null, $this->decryptValue());
+        self::assertSame('company', $changes[0]->customerType);
+        self::assertNull($changes[1]->customerType);
+    }
+
+    public function testConnectionIncludesCustomerTypeAndShareCode(): void
+    {
+        // B2B (#163): a connection carries customer_type + share_code (both nullable).
+        $obj = ['connection_id' => 'c-1', 'user_id' => 'co-9',
+                'customer_type' => 'company', 'share_code' => 'PARTNER', 'values' => []];
+        $conn = Connection::fromApi($obj, fn (string $s): ?string => null, $this->decryptValue());
+        self::assertSame('company', $conn->customerType);
+        self::assertSame('PARTNER', $conn->shareCode);
+
+        $bare = Connection::fromApi(
+            ['connection_id' => 'c-2', 'user_id' => 'p-1', 'values' => []],
+            fn (string $s): ?string => null,
+            $this->decryptValue(),
+        );
+        self::assertNull($bare->customerType);
+        self::assertNull($bare->shareCode);
+    }
 }

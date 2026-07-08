@@ -21,6 +21,8 @@ final class RequestField
         public readonly ?string $type,
         public readonly bool $oneTime,
         public readonly bool $mandatory,
+        /** Which customer TYPE this row applies to: "person"|"company"|"both" (B2B, #163); null on older API. */
+        public readonly ?string $audience = null,
         public readonly array $raw = [],
     ) {
     }
@@ -39,6 +41,7 @@ final class RequestField
                 Coerce::bool($obj['mandatory_provide'] ?? null)
                 || Coerce::bool($obj['mandatory_connected'] ?? null)
             ),
+            audience: isset($obj['audience']) ? (string) $obj['audience'] : null,
             raw: $obj,
         );
     }
