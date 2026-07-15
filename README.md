@@ -896,3 +896,16 @@ cross-language decryption fixture: it loads the PBES2 service PEM, decrypts a te
 wrapper to its known plaintext, and decrypts a binary wrapper through the envelope
 to the expected inner-bytes hash. It also runs an independent `openssl` CLI
 cross-check, so the crypto is proven platform-correct, not merely self-consistent.
+
+## Sign in with allme (OAuth, #195)
+
+```php
+use Allus\CompanyData\OAuthClient;
+
+$oauth = OAuthClient::fromConfig('idw-config.json');
+$url = $oauth->authorizeUrl('signin', state: $state, codeChallenge: $ch);
+// ...user approves; your redirect receives ?code=...
+$res = $oauth->completeSignIn($code, $verifier); // $res['user'], $res['mode'], $res['values']
+```
+
+Modes: `signin` | `one_time` (claim values decrypted for you) | `connect`. `pollResult($state)` drives the detached mode.

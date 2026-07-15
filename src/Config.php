@@ -41,6 +41,11 @@ final class Config
         'customerClientSecret' => 'ALLUS_CUSTOMER_CLIENT_SECRET',
         'accountPrivateKey' => 'ALLUS_ACCOUNT_PRIVATE_KEY',
         'accountPassphrase' => 'ALLUS_ACCOUNT_PASSPHRASE',
+        'oauthClientId' => 'ALLUS_OAUTH_CLIENT_ID',
+        'oauthRedirectUri' => 'ALLUS_OAUTH_REDIRECT_URI',
+        'oauthClientSecret' => 'ALLUS_OAUTH_CLIENT_SECRET',
+        'oauthPrivateKey' => 'ALLUS_OAUTH_PRIVATE_KEY',
+        'oauthKeyPassphrase' => 'ALLUS_OAUTH_KEY_PASSPHRASE',
         'cacheDir' => 'ALLUS_CACHE_DIR',
         'format' => 'ALLUS_FORMAT',
     ];
@@ -62,6 +67,11 @@ final class Config
         'customerClientSecret' => 'customer_client_secret',
         'accountPrivateKey' => 'account_private_key',
         'accountPassphrase' => 'account_passphrase',
+        'oauthClientId' => 'oauth_client_id',
+        'oauthRedirectUri' => 'oauth_redirect_uri',
+        'oauthClientSecret' => 'oauth_client_secret',
+        'oauthPrivateKey' => 'oauth_private_key',
+        'oauthKeyPassphrase' => 'oauth_key_passphrase',
         'cacheDir' => 'cache_dir',
         'format' => 'format',
     ];
@@ -84,6 +94,13 @@ final class Config
         'customerClientId',
         'customerClientSecret',
         'accountPrivateKey',
+    ];
+
+    /** "Sign in with allme" idw role (#195): only the client id + redirect are required. */
+    private const REQUIRED_IDW = [
+        'apiUrl',
+        'oauthClientId',
+        'oauthRedirectUri',
     ];
 
     private const VALID_FORMATS = ['json', 'xml'];
@@ -115,6 +132,13 @@ final class Config
         public readonly ?array $webhookBasic = null,        // {"username","password"} → Basic auth
         public readonly ?array $webhookHeader = null,       // {"name","value"} → custom header
         public readonly bool $webhookAuthNone = false,      // explicit opt-out — verify always true
+        // "Sign in with allme" idw role (#195). oauthPrivateKey + oauthKeyPassphrase are needed only
+        // to decrypt one_time claim values (config-only key handling).
+        public readonly ?string $oauthClientId = null,
+        public readonly ?string $oauthRedirectUri = null,
+        public readonly ?string $oauthClientSecret = null,
+        public readonly ?string $oauthPrivateKey = null,
+        public readonly ?string $oauthKeyPassphrase = null,
     ) {
     }
 
@@ -173,6 +197,34 @@ final class Config
     public static function fromCustomerEnv(): self
     {
         return self::build([], 'customer');
+    }
+
+    /**
+     * Load an IDW-role config (#195, "Sign in with allme") from a JSON file — requires the
+     * oauth_client_id + oauth_redirect_uri. Env vars override file values.
+     */
+    public static function fromIdwFile(string $path): self
+    {
+        $raw = @file_get_contents($path);
+        if ($raw === false) {
+            throw new ConfigError("config file not found: {$path}");
+        }
+        try {
+            $data = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new ConfigError("config file is not valid JSON: {$path}: {$e->getMessage()}");
+        }
+        if (!is_array($data) || array_is_list($data)) {
+            throw new ConfigError("config file must be a JSON object: {$path}");
+        }
+        /** @var array<string,mixed> $data */
+        return self::build($data, 'idw');
+    }
+
+    /** Build an IDW-role config entirely from {@code ALLUS_*} env vars. */
+    public static function fromIdwEnv(): self
+    {
+        return self::build([], 'idw');
     }
 
     /**
@@ -293,7 +345,11 @@ final class Config
 
         // Required fields (fail fast).
         $missing = [];
-        $required = $role === 'customer' ? self::REQUIRED_CUSTOMER : self::REQUIRED;
+        $required = match ($role) {
+            'idw' => self::REQUIRED_IDW,
+            'customer' => self::REQUIRED_CUSTOMER,
+            default => self::REQUIRED,
+        };
         foreach ($required as $name) {
             $v = $values[$name] ?? null;
             if ($v === null || $v === '') {
@@ -332,6 +388,11 @@ final class Config
             webhookBasic: $basic,
             webhookHeader: $header,
             webhookAuthNone: $authNone,
+            oauthClientId: isset($values['oauthClientId']) ? (string) $values['oauthClientId'] : null,
+            oauthRedirectUri: isset($values['oauthRedirectUri']) ? (string) $values['oauthRedirectUri'] : null,
+            oauthClientSecret: isset($values['oauthClientSecret']) ? (string) $values['oauthClientSecret'] : null,
+            oauthPrivateKey: isset($values['oauthPrivateKey']) ? (string) $values['oauthPrivateKey'] : null,
+            oauthKeyPassphrase: isset($values['oauthKeyPassphrase']) ? (string) $values['oauthKeyPassphrase'] : null,
         );
     }
 
