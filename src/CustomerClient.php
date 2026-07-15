@@ -6,6 +6,7 @@ namespace Allus\CompanyData;
 
 use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Errors\ConfigError;
+use Allus\CompanyData\Errors\ValidationError;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\CustomerConnection;
@@ -46,6 +47,13 @@ final class CustomerClient
     private array $pubkeyCache = [];
     /** @var array<string,?RSAPublicKey> */
     private array $serviceKeyCache = [];
+    /**
+     * "companyCode/serviceCode" → {request_field_id: field_type}, resolved from the
+     * connect-screen lookup for typed-answer validation (#302).
+     *
+     * @var array<string,array<string,string>>
+     */
+    private array $requestTypeCache = [];
     private ?Pump $pump = null;
 
     public function __construct(
@@ -127,6 +135,9 @@ final class CustomerClient
 
     /**
      * Answer a consent's request rows by TYPING values (encrypted to the target service key).
+     *
+     * Each value is validated against its request row's field type (resolved from the
+     * connect-screen lookup, cached per service) before encryption.
      *
      * @param list<array{request_field_id:string,value:string,kind?:string}> $answers
      */
@@ -341,6 +352,43 @@ final class CustomerClient
     }
 
     /**
+     * Resolve {request_field_id: field_type} for a service from the connect-screen lookup,
+     * cached per company/service. Best-effort — a lookup failure yields an empty map so
+     * typed-answer validation is simply skipped (#302).
+     *
+     * @return array<string,string>
+     */
+    private function requestFieldTypes(string $companyCode, string $serviceCode): array
+    {
+        $key = $companyCode . '/' . $serviceCode;
+        if (array_key_exists($key, $this->requestTypeCache)) {
+            return $this->requestTypeCache[$key];
+        }
+        $out = [];
+        try {
+            $body = $this->http->get(self::CONN . '/lookup/' . $companyCode . '/' . $serviceCode);
+            $rows = is_array($body) && isset($body['request_fields']) && is_array($body['request_fields'])
+                ? $body['request_fields']
+                : [];
+            foreach ($rows as $r) {
+                if (!is_array($r)) {
+                    continue;
+                }
+                $rid = $r['id'] ?? null;
+                $ftype = $r['field_type'] ?? $r['type'] ?? null;
+                if ($rid !== null && $rid !== '' && $ftype !== null && $ftype !== '') {
+                    $out[(string) $rid] = (string) $ftype;
+                }
+            }
+        } catch (\Throwable) {
+            // best-effort — a failed lookup skips validation
+            $out = [];
+        }
+        $this->requestTypeCache[$key] = $out;
+        return $out;
+    }
+
+    /**
      * @param list<array{request_field_id:string,value:string,kind?:string}> $answers
      * @return list<array<string,mixed>>
      */
@@ -350,12 +398,21 @@ final class CustomerClient
         if ($pub === null) {
             throw new ConfigError("no service key for {$companyCode}/{$serviceCode}");
         }
+        // #302: validate each typed answer against its request row's field type BEFORE
+        // encryption. The type is resolved server-side from the connect-screen lookup
+        // (cached per service); an answer whose type can't be resolved is skipped.
+        $types = $this->requestFieldTypes($companyCode, $serviceCode);
         $out = [];
         foreach ($answers as $a) {
+            $plain = (string) $a['value'];
+            $ftype = $types[(string) $a['request_field_id']] ?? null;
+            if ($ftype !== null && !FieldValidation::isFieldValueValid($ftype, $plain)) {
+                throw new ValidationError((string) $a['request_field_id'], $ftype);
+            }
             $out[] = [
                 'request_field_id' => $a['request_field_id'],
                 'kind' => $a['kind'] ?? 'typed',
-                'value' => Crypto::encryptForPublicKey((string) $a['value'], $pub),
+                'value' => Crypto::encryptForPublicKey($plain, $pub),
             ];
         }
         return $out;

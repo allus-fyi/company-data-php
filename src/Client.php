@@ -9,6 +9,7 @@ use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Errors\DecryptError;
 use Allus\CompanyData\Errors\RateLimitError;
+use Allus\CompanyData\Errors\ValidationError;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Connection;
@@ -974,6 +975,13 @@ final class Client
         $answersOut = [];
         foreach ($fill as $slug => $val) {
             $plain = is_string($val) ? $val : json_encode($val, JSON_THROW_ON_ERROR);
+            // #302: validate the plaintext against the field's declared type (resolved from the
+            // pinned flow definition) before it is encrypted. A slug with no field element in the
+            // graph resolves to null → skipped (do not invent a type).
+            $ftype = self::flowFieldType($run->definition, (string) $slug);
+            if ($ftype !== null && !FieldValidation::isFieldValueValid($ftype, $plain)) {
+                throw new ValidationError((string) $slug, $ftype);
+            }
             $values = [];
             foreach ($run->bindings as $uid) {
                 $key = ($uid === $run->serviceUserId())
@@ -1231,5 +1239,31 @@ final class Client
     {
         $node = self::nodeByKey($definition, $nodeKey);
         return $node !== null && isset($node['party']) ? (string) $node['party'] : null;
+    }
+
+    /**
+     * Resolve a fill slug to its {@code field_type} from the pinned flow graph (#302). Scans every
+     * node's {@code elements} for a {@code kind='field'} element with a matching {@code slug}. Returns
+     * null when the slug has no field element (skip validation — never invent a type).
+     *
+     * @param array<string,mixed> $definition
+     */
+    private static function flowFieldType(array $definition, string $slug): ?string
+    {
+        $nodes = $definition['nodes'] ?? null;
+        if (!is_array($nodes)) {
+            return null;
+        }
+        foreach ($nodes as $n) {
+            if (!is_array($n) || !is_array($n['elements'] ?? null)) {
+                continue;
+            }
+            foreach ($n['elements'] as $el) {
+                if (is_array($el) && ($el['kind'] ?? null) === 'field' && ($el['slug'] ?? null) === $slug) {
+                    return isset($el['field_type']) ? (string) $el['field_type'] : null;
+                }
+            }
+        }
+        return null;
     }
 }
