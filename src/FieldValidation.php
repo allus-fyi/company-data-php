@@ -43,7 +43,8 @@ final class FieldValidation
     private const OBJ = [
         'address' => [
             'postal_code' => ['re' => '~^[A-Za-z0-9][A-Za-z0-9 -]{1,9}$~'],
-            'street' => [], 'building_number' => [], 'affix' => [], 'city' => [], 'state' => [], 'country' => [],
+            'country' => ['kind' => 'countryCode'], 'state' => ['kind' => 'usState'],
+            'street' => [], 'building_number' => [], 'affix' => [], 'city' => [],
         ],
         'creditcard' => [
             'number' => ['kind' => 'card'],
@@ -77,6 +78,7 @@ final class FieldValidation
         'address' => ['kind' => 'object'], 'creditcard' => ['kind' => 'object'], 'bank' => ['kind' => 'object'],
         'document' => ['kind' => 'object'], 'legal_document' => ['kind' => 'object'],
         'number' => ['kind' => 'number'], 'boolean' => ['kind' => 'boolean'],
+        'country' => ['kind' => 'countryCode'], 'nationality' => ['kind' => 'countryCode'],
         // text + unknown => no rule => accept anything
     ];
 
@@ -105,6 +107,18 @@ final class FieldValidation
         return self::isFieldValueValid($type, $value) ? null : ($type ?? '');
     }
 
+    /** True if {@code $code} is an assigned ISO 3166-1 alpha-2 country code (#303). */
+    public static function isValidCountryCode(?string $code): bool
+    {
+        return $code !== null && in_array($code, CountryData::COUNTRY_CODES, true);
+    }
+
+    /** The ITU E.164 dial code (digits only, no {@code +}) for a country code, or null (#303). */
+    public static function dialCodeFor(?string $code): ?string
+    {
+        return $code === null ? null : (CountryData::DIAL_CODES[$code] ?? null);
+    }
+
     /** kind handlers for the "content" checks (top-level rules AND structured sub-rules). */
     private static function applyKind(string $kind, string $value): bool
     {
@@ -124,6 +138,10 @@ final class FieldValidation
                 return $t !== '' && is_numeric($t) && is_finite((float) $t);
             case 'boolean':
                 return $value === 'true' || $value === 'false';
+            case 'countryCode':
+                return in_array($value, CountryData::COUNTRY_CODES, true);
+            case 'usState':
+                return in_array($value, CountryData::US_STATE_CODES, true);
             default:
                 return true;
         }
