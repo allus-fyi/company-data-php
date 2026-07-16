@@ -286,4 +286,16 @@ final class Crypto
         // The platform plaintext is always UTF-8.
         return $s === '' || preg_match('//u', $s) === 1;
     }
+
+    /**
+     * #311 verified fields: true iff sha256(salt ‖ plaintext) === expectedHash (hex). Consumers
+     * recompute this from the plaintext they just decrypted and trust the verified flag only on a match.
+     */
+    public static function hashMatches(string $salt, string $expectedHash, string $plaintext): bool
+    {
+        if ($salt === '' || $expectedHash === '') {
+            return false;
+        }
+        return hash_equals($expectedHash, hash('sha256', $salt . $plaintext));
+    }
 }
