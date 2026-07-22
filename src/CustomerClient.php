@@ -295,6 +295,24 @@ final class CustomerClient
         unset($this->pubkeyCache[$userId]);
     }
 
+    /**
+     * #411 — drop a SERVICE's cached public key, so the next answer/document encrypted to it
+     * refetches. The mirror of {@see invalidatePublicKey}, in the service→customer direction.
+     *
+     * The changes feed calls this for you on a `service_key_rotated` event; call it yourself when
+     * consuming that event over a webhook, passing the body's `company_share_code` and
+     * `service_share_code` (the verifier is static and has no client instance).
+     *
+     * No generation counter here, for the same runtime reason recorded on `$pubkeyCache` above:
+     * PHP's request-scoped, single-threaded model has no window between the cache check and the
+     * store in which this method could run. Under an async runtime it inherits the race and needs
+     * the counter the other five SDKs carry.
+     */
+    public function invalidateServiceKey(string $companyCode, string $serviceCode): void
+    {
+        unset($this->serviceKeyCache[$companyCode . '/' . $serviceCode]);
+    }
+
     /** @param array<string,mixed> $event */
     private function decryptChange(array $event): Change
     {
@@ -307,6 +325,15 @@ final class CustomerClient
             $personId = $event['person_user_id'] ?? $event['person_id'] ?? null;
             if (is_string($personId) && $personId !== '') {
                 $this->invalidatePublicKey($personId);
+            }
+        }
+        // #411: a service this customer connects to replaced its keypair. Same either-key match:
+        // the pull feed names it `event`, a raw webhook body names it `action`.
+        if (($event['event'] ?? null) === 'service_key_rotated' || ($event['action'] ?? null) === 'service_key_rotated') {
+            $companyCode = $event['company_share_code'] ?? null;
+            $serviceCode = $event['service_share_code'] ?? null;
+            if (is_string($companyCode) && $companyCode !== '' && is_string($serviceCode) && $serviceCode !== '') {
+                $this->invalidateServiceKey($companyCode, $serviceCode);
             }
         }
 
