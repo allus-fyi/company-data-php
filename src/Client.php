@@ -103,6 +103,18 @@ final class Client
      *
      * @var array<string,RSAPublicKey>
      */
+    /**
+     * #344 review pass 3 — why this SDK has NO generation counter, unlike Go/Java/C#/TS/Python.
+     *
+     * The lost-invalidation race needs a window between the cache check and the store in which
+     * `invalidatePublicKey` can run. PHP's request-scoped, single-threaded execution model has no
+     * such window: there are no threads, no event loop and no `await`, so nothing else in this
+     * process can run while the HTTP fetch below is in progress. The counter would be dead code.
+     *
+     * This exemption is a property of the RUNTIME, not of this code. If this client is ever
+     * wrapped in an async runtime (Swoole, Fibers, ReactPHP) or shared across threads, it inherits
+     * the race and MUST gain the same generation counter the other five SDKs carry.
+     */
     private array $pubKeyCache = [];
 
     /** The service RSA public key (public half of the loaded private key), derived once. */
@@ -395,12 +407,56 @@ final class Client
     }
 
     /**
+     * #344 — drop a person's cached public key by share code.
+     *
+     * The pull feed calls this for you (see {@see invalidateOnKeyRotation}). Call it yourself if
+     * you consume changes over a **webhook**: {@see Webhooks::verify()} is static and has no
+     * client instance, so it cannot reach this cache. On receiving a `key_rotated` webhook, call
+     * `$client->invalidatePublicKey($change->shareCode)`.
+     */
+    public function invalidatePublicKey(string $shareCode): void
+    {
+        unset($this->pubKeyCache[$shareCode]);
+    }
+
+    /**
+     * #344 — drop a person's cached public key when the feed reports they rotated it.
+     *
+     * A public key is immutable, so caching one is safe — until the person replaces it. Persons
+     * learn about a rotation from a silent push; a SERVICE receives no pushes at all, so before
+     * this event a long-lived worker could keep encrypting documents to the rotated-away key for
+     * as long as the process lived, with no recovery.
+     *
+     * Called from every path that turns a raw event into a {@see Change} — the pull feed and the
+     * webhook receiver alike — so whichever delivery channel an integrator uses, the cache clears.
+     *
+     * Note this is a SIGNAL and is deliberately eventual: nothing rejects a document encrypted to
+     * a stale key, so there is a window between the rotation and this event being drained.
+     *
+     * @param array<string,mixed> $event
+     */
+    private function invalidateOnKeyRotation(array $event): void
+    {
+        // #344: the pull feed names it `event`; a raw webhook body names it `action` (and on
+        // document rows `action` carries signed|accepted|cancelled instead) — so match either key.
+        if (($event['event'] ?? null) !== 'key_rotated' && ($event['action'] ?? null) !== 'key_rotated') {
+            return;
+        }
+        $shareCode = $event['share_code'] ?? null;
+        if (is_string($shareCode) && $shareCode !== '') {
+            $this->invalidatePublicKey($shareCode);
+        }
+    }
+
+    /**
      * The pump's decrypt: a raw event dict → a typed {@see Change} (value at delivery).
      *
      * @param array<string,mixed> $event
      */
     private function decryptChange(array $event): Change
     {
+        $this->invalidateOnKeyRotation($event);
+
         return Change::fromApi(
             $event,
             fn (string $slug): ?string => $this->typeForSlug($slug),

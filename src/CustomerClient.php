@@ -44,6 +44,18 @@ final class CustomerClient
     /** OAEP-SHA1 account key — unwraps the account-key webhook envelope (OpenSSL default). */
     private readonly ?RSAPrivateKey $accountEnvelopeKey;
     /** @var array<string,?RSAPublicKey> */
+    /**
+     * #344 review pass 3 — why this SDK has NO generation counter, unlike Go/Java/C#/TS/Python.
+     *
+     * The lost-invalidation race needs a window between the cache check and the store in which
+     * `invalidatePublicKey` can run. PHP's request-scoped, single-threaded execution model has no
+     * such window: there are no threads, no event loop and no `await`, so nothing else in this
+     * process can run while the HTTP fetch below is in progress. The counter would be dead code.
+     *
+     * This exemption is a property of the RUNTIME, not of this code. If this client is ever
+     * wrapped in an async runtime (Swoole, Fibers, ReactPHP) or shared across threads, it inherits
+     * the race and MUST gain the same generation counter the other five SDKs carry.
+     */
     private array $pubkeyCache = [];
     /** @var array<string,?RSAPublicKey> */
     private array $serviceKeyCache = [];
@@ -273,9 +285,31 @@ final class CustomerClient
         return array_values(array_filter($items, 'is_array'));
     }
 
+    /**
+     * #344 — drop a person's cached public key by user id. The changes feed calls this for you;
+     * call it yourself when consuming `key_rotated` over a webhook (the verifier is static and has
+     * no client instance).
+     */
+    public function invalidatePublicKey(string $userId): void
+    {
+        unset($this->pubkeyCache[$userId]);
+    }
+
     /** @param array<string,mixed> $event */
     private function decryptChange(array $event): Change
     {
+        // #344: a service gets no pushes, so the feed is its only rotation signal — without this
+        // the cached key (including a cached `null`) would outlive the rotation for the whole
+        // process lifetime.
+        // #344: the pull feed names it `event`; a raw webhook body names it `action` (and on
+        // document rows `action` carries signed|accepted|cancelled instead) — so match either key.
+        if (($event['event'] ?? null) === 'key_rotated' || ($event['action'] ?? null) === 'key_rotated') {
+            $personId = $event['person_user_id'] ?? $event['person_id'] ?? null;
+            if (is_string($personId) && $personId !== '') {
+                $this->invalidatePublicKey($personId);
+            }
+        }
+
         return Change::fromApi(
             $event,
             static fn (string $slug): ?string => null,

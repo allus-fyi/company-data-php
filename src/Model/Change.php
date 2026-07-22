@@ -52,6 +52,8 @@ final class Change
         public readonly ?string $cancelEffectiveDate = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
+        /** #344: set on key_rotated — SHA-256 fingerprint of the person's NEW public key. */
+        public readonly ?string $publicKeySha256 = null,
         public readonly bool $verified = false,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
@@ -106,6 +108,8 @@ final class Change
             cancelEffectiveDate: ($event === 'document_status_changed' && isset($obj['cancel_effective_date'])) ? (string) $obj['cancel_effective_date'] : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
+            publicKeySha256: ($event === 'key_rotated' && isset($obj['public_key_sha256']))
+                ? (string) $obj['public_key_sha256'] : null,
             verified: Value::verifiedFrom($obj, $value),
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
