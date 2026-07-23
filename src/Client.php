@@ -215,6 +215,16 @@ final class Client
         return $this->typeBySlug[$slug] ?? null;
     }
 
+    // ── 2FA-by-allme (#436) ──────────────────────────────────────────────────────
+
+    private ?TwoFactorClient $twoFactorClient = null;
+
+    /** #436 2FA-by-allme — the relying-party challenge API (twoFactor()->challenge / ->result). */
+    public function twoFactor(): TwoFactorClient
+    {
+        return $this->twoFactorClient ??= new TwoFactorClient($this->http);
+    }
+
     // ── definitions ────────────────────────────────────────────────────────────
 
     /**

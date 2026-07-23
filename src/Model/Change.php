@@ -99,7 +99,9 @@ final class Change
             value: $value,
             live: $live,
             documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
-            status: ($event === 'document_status_changed' && isset($obj['status'])) ? (string) $obj['status'] : null,
+            // #436: 2fa_challenge_completed carries the outcome in `status` (approved|denied|revoked);
+            // its challenge_id/completed_at stay in $raw. The poll is the record (spec §3).
+            status: (($event === 'document_status_changed' || $event === '2fa_challenge_completed') && isset($obj['status'])) ? (string) $obj['status'] : null,
             action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,
             note: ($event === 'document_status_changed' && isset($obj['note'])) ? (string) $obj['note'] : null,
             method: ($event === 'document_status_changed' && isset($obj['method'])) ? (string) $obj['method'] : null,
