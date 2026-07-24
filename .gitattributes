@@ -1,0 +1,6 @@
+# #478: the identity example is a dev-only sub-project — keep it out of the published
+# allus/company-data package. Composer builds dist tarballs via `git archive`, which honours
+# export-ignore; the dir entry drops the subtree and the /** glob covers every nested path.
+# (The example's own transients — vendor/, .runtime/, .frontend/ — are git-ignored separately.)
+/examples export-ignore
+/examples/** export-ignore

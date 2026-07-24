@@ -1,0 +1,38 @@
+{
+    "name": "allus/identity-example",
+    "description": "Runnable identity example (sign-in / OIDC / 2FA) for the allus company-data PHP SDK. Its own composer sub-project — NOT part of the published SDK package.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "allus/company-data": "*",
+        "facile-it/php-openid-client": "^0.3",
+        "nyholm/psr7": "^1.8",
+        "symfony/http-client": "^6 || ^7"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../..",
+            "options": { "symlink": true }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Allus\\IdentityExample\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    },
+    "archive": {
+        "exclude": ["/vendor", "/.runtime", "/.frontend", "/.DS_Store"]
+    },
+    "scripts": {
+        "start": "@php bin/start.php"
+    }
+}
