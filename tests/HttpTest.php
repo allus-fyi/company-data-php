@@ -182,6 +182,30 @@ final class HttpTest extends TestCase
         }
     }
 
+    public function test429PendingCapSurfacesImmediatelyWithoutRetry(): void
+    {
+        // #481: a twofa.pending_cap 429 can never be cleared by a retry — it must surface at once
+        // as ApiError, NOT go through the Retry-After backoff (which every other 429 gets).
+        $t = new FakeTransport();
+        $t->postResponses = [FakeTransport::tokenOk()];
+        $t->getResponses = [
+            FakeTransport::json(429, ['error_key' => 'twofa.pending_cap'], ['Retry-After' => '2']),
+            FakeTransport::json(200, ['should' => 'not be reached']),
+        ];
+        $sleeps = [];
+        $c = $this->client($t, sleeps: $sleeps);
+        try {
+            $c->get('/api/service-2fa/challenges');
+            self::fail('expected ApiError');
+        } catch (ApiError $e) {
+            self::assertSame(429, $e->status);
+            self::assertSame('twofa.pending_cap', $e->errorKey);
+            self::assertNotInstanceOf(RateLimitError::class, $e); // not the retry path
+            self::assertSame([], $sleeps); // no backoff sleep
+            self::assertCount(1, $t->gets); // no retry — the 200 was never consumed
+        }
+    }
+
     public function test429DefaultBackoffWhenNoRetryAfter(): void
     {
         $t = new FakeTransport();

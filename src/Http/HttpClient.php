@@ -258,13 +258,19 @@ final class HttpClient
             }
 
             if ($status === 429) {
+                [$errorKey, $message] = $this->extractError($resp);
+                // #481: a pending-cap 429 means the caller already holds the maximum concurrent
+                // 2FA challenges — a retry can never clear that, so surface it immediately as an
+                // ApiError instead of the blind Retry-After backoff every other 429 gets.
+                if ($errorKey === 'twofa.pending_cap') {
+                    throw new ApiError($status, $errorKey, $message);
+                }
                 $retryAfter = $this->parseRetryAfter($resp);
                 if ($retries429 < $this->maxRetries429) {
                     $retries429++;
                     ($this->sleep)($this->backoffDelay($retryAfter, $retries429));
                     continue;
                 }
-                [$errorKey, $message] = $this->extractError($resp);
                 throw new RateLimitError($retryAfter, $errorKey, $message);
             }
 

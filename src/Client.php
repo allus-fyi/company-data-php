@@ -222,7 +222,7 @@ final class Client
     /** #436 2FA-by-allme — the relying-party challenge API (twoFactor()->challenge / ->result). */
     public function twoFactor(): TwoFactorClient
     {
-        return $this->twoFactorClient ??= new TwoFactorClient($this->http);
+        return $this->twoFactorClient ??= new TwoFactorClient($this->http, $this->sleep);
     }
 
     // ── definitions ────────────────────────────────────────────────────────────

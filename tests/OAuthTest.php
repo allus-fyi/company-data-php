@@ -157,4 +157,37 @@ final class OAuthTest extends TestCase
             $this->assertSame(410, $e->status);
         }
     }
+
+    // ── #481: 2fa_enroll mode + detached enrollment poll delivery ──────────────
+
+    public function testAuthorizeUrlAccepts2faEnrollMode(): void
+    {
+        $c = new OAuthClient($this->idwCfg(), new FakeTransport());
+        [, $q] = $this->parseUrl($c->authorizeUrl('2fa_enroll', responseMode: 'detached', state: 'EN1'));
+        $this->assertSame('2fa_enroll', $q['mode']);
+        $this->assertSame('detached', $q['response_mode']);
+    }
+
+    public function testPollResultPendingThenEnrolled(): void
+    {
+        // #481: a detached 2fa_enroll delivers {enrolled: true, state}, NOT a code. pollResult must
+        // return on the `enrolled` sentinel — otherwise it consumes the one-shot result and times out.
+        $t = new FakeTransport();
+        $t->postResponses[] = FakeTransport::text(202, '');
+        $t->postResponses[] = FakeTransport::json(200, ['enrolled' => true, 'state' => 'EN1']);
+        $c = new OAuthClient($this->idwCfg(), $t, sleep: static fn (int $s) => null);
+        $res = $c->pollResult('EN1', 5, 0);
+        $this->assertTrue($res['enrolled']);
+        $this->assertSame('EN1', $res['state']);
+        $this->assertCount(2, $t->posts); // returned on first delivery, never polled past it
+    }
+
+    public function testPollResultStillReturnsOnCodeAfterEnrollChange(): void
+    {
+        // Regression: the enroll addition must not break the sign-in `code` delivery.
+        $t = new FakeTransport();
+        $t->postResponses[] = FakeTransport::json(200, ['code' => 'AUTHCODE', 'state' => 'DET1']);
+        $c = new OAuthClient($this->idwCfg(), $t, sleep: static fn (int $s) => null);
+        $this->assertSame('AUTHCODE', $c->pollResult('DET1', 5, 0)['code']);
+    }
 }

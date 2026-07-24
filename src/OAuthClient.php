@@ -28,7 +28,7 @@ final class OAuthClient
 
     private const NON_CLAIMABLE = ['photo', 'document', 'legal_document'];
     private const MAX_CLAIMS = 15;
-    private const MODES = ['signin', 'one_time', 'connect'];
+    private const MODES = ['signin', 'one_time', 'connect', '2fa_enroll'];
     private const RESPONSE_MODES = ['redirect', 'detached'];
 
     private readonly string $apiUrl;
@@ -75,7 +75,7 @@ final class OAuthClient
         ?string $redirectUri = null,
     ): string {
         if (!in_array($mode, self::MODES, true)) {
-            throw new ConfigError("invalid mode '{$mode}' (expected signin | one_time | connect)");
+            throw new ConfigError("invalid mode '{$mode}' (expected signin | one_time | connect | 2fa_enroll)");
         }
         if (!in_array($responseMode, self::RESPONSE_MODES, true)) {
             throw new ConfigError("invalid responseMode '{$responseMode}' (expected redirect | detached)");
@@ -225,7 +225,11 @@ final class OAuthClient
     }
 
     /**
-     * Poll /oauth2/result for a detached sign-in (single-delivery).
+     * Poll /oauth2/result for a detached sign-in or enrollment (single-delivery).
+     *
+     * A detached sign-in delivers `{code, state}`; a detached `2fa_enroll` delivers
+     * `{enrolled: true, state}` (#481). Returns on the first delivered shape (`code` OR `enrolled`)
+     * and never polls past it, so a one-shot enrollment result is not consumed and lost.
      *
      * @return array<string,mixed>
      */
@@ -240,7 +244,11 @@ final class OAuthClient
             $res = $this->transport->post("{$this->apiUrl}/oauth2/result", $form, ['Accept' => 'application/json']);
             if ($res->status === 200) {
                 $body = self::decodeObject($res->body);
-                if (isset($body['code'])) {
+                // #481: return on the first delivered terminal shape — a sign-in `code` OR a
+                // 2fa_enroll `enrolled` sentinel ({enrolled: true, state}). Both are one-shot;
+                // returning here (rather than looping) keeps an enrollment result from being
+                // consumed and lost to a timeout.
+                if (isset($body['code']) || !empty($body['enrolled'])) {
                     return $body;
                 }
             } elseif ($res->status === 410) {
