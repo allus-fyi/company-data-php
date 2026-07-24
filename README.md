@@ -15,10 +15,15 @@ request slots you configured.
 > This SDK is one of six language ports that share an identical API surface.
 > This manual is the PHP view of it.
 
-> **Example:** a runnable website demonstrating every identity scenario
-> (Sign in with allme, OIDC login, 2FA by allme) through this SDK lives in
-> [`examples/identity/`](examples/identity/) — one command (`composer start`) and
-> a browser. See its [README](examples/identity/README.md).
+> **Examples:** runnable websites demonstrating this SDK live under `examples/`,
+> each one command (`composer start`) and a browser:
+> [`examples/identity/`](examples/identity/) — the identity scenarios (Sign in with
+> allme, OIDC login, 2FA by allme);
+> [`examples/flow/`](examples/flow/) — contract flows driven end-to-end; and
+> [`examples/company-data/`](examples/company-data/) — the regular company-data
+> surface (connections read, request fields, the change feed, webhooks, documents).
+> See their READMEs ([identity](examples/identity/README.md),
+> [flow](examples/flow/README.md), [company-data](examples/company-data/README.md)).
 
 **Contents:** [TL;DR — fetch new updates](#tldr--fetch-new-updates) ·
 [Quickstart](#quickstart) · [Every call](#every-call) ·
