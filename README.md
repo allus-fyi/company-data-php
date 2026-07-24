@@ -512,6 +512,12 @@ identity(): array                             // #491 gap 3 — this client's {c
 * `flowRunDocument($runId)` downloads the company's own service-key-encrypted copy of a run's generated contract and returns the plaintext file bytes (`404` until the run generates a document) — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument`).
 * `identity()` returns this client's `{company_user_id, service_id}` from `GET /api/company-data/whoami`, so a `triggerFlowRun` binding's **company** party can bind to `company_user_id` (the person party's user_id comes from the connection).
 
+> **Example:** a runnable website that drives a contract flow end-to-end through
+> these calls — trigger, type-checked step filling, a person turn on the phone, then
+> the decrypted answers + downloaded document — is in
+> [`examples/flow/`](examples/flow/): one command (`composer start`) and a browser.
+> See its [README](examples/flow/README.md).
+
 ### `updateDocumentStatus` / `updateDocumentMetadata` / `deleteDocument`
 
 ```php

@@ -1,0 +1,35 @@
+{
+    "name": "allus/flow-example",
+    "description": "Runnable contract-flow example (trigger / drive / type-check / answers + document) for the allus company-data PHP SDK. Its own composer sub-project — NOT part of the published SDK package.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "allus/company-data": "*"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../..",
+            "options": { "symlink": true }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Allus\\FlowExample\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    },
+    "archive": {
+        "exclude": ["/vendor", "/.runtime", "/.frontend", "/.DS_Store"]
+    },
+    "scripts": {
+        "start": "@php bin/start.php"
+    }
+}
