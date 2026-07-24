@@ -484,6 +484,7 @@ $signed = $client->createDocument([
 ```php
 listDocuments(?string $personUserId = null, ?string $status = null, int $limit = 100, int $offset = 0): array  // list<Document>
 document(string $documentId): Document
+documentFile(string $documentId): string   // #491: the file BYTES
 ```
 
 ```php
@@ -497,6 +498,19 @@ $value = $doc->payloadKind === 'json' ? $doc->json() : $doc->value;   // json() 
 
 * `listDocuments` filters optionally by `personUserId` and/or `status` and pages with `limit`/`offset`.
 * `document($id)` fetches one. Call `->json()` on a `'json'` document to get the plaintext (it transparently decrypts a per-person, encrypted document; a broadcast doc is already plaintext).
+* `documentFile($id)` (#491) downloads a `'file'` document's BYTES — the metadata methods don't include them. A **broadcast** (plaintext) document's bytes are returned as-is; a **per-person / private** document is encrypted to the *recipient's* key (not your service key), so `documentFile` fails clearly with `documents.recipient_encrypted` rather than a doomed decrypt. For a generated flow contract's own copy use `flowRunDocument($runId)` below (that copy IS service-key-encrypted).
+
+### Contract flows & identity (#491)
+
+```php
+flowRunAnswers(FlowRun|string $run): array    // #491 gap 1 — a completed run's DECRYPTED answers {slug: plaintext}
+flowRunDocument(string $runId): string        // #491 gap 2 — the company's own copy of a run's generated contract (plaintext bytes)
+identity(): array                             // #491 gap 3 — this client's {company_user_id, service_id}
+```
+
+* `flowRunAnswers($run)` returns a completed run's decrypted `{slug => plaintext}` answers (accepts a fetched `FlowRun` or a run id). It is the public accessor for a finished run's answers, which `processFlowRun` returns untouched.
+* `flowRunDocument($runId)` downloads the company's own service-key-encrypted copy of a run's generated contract and returns the plaintext file bytes (`404` until the run generates a document) — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument`).
+* `identity()` returns this client's `{company_user_id, service_id}` from `GET /api/company-data/whoami`, so a `triggerFlowRun` binding's **company** party can bind to `company_user_id` (the person party's user_id comes from the connection).
 
 ### `updateDocumentStatus` / `updateDocumentMetadata` / `deleteDocument`
 

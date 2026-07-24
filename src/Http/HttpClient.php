@@ -153,6 +153,17 @@ final class HttpClient
     }
 
     /**
+     * GET returning the RAW 2xx response body bytes — NO JSON/XML parse. For downloading file bytes whose
+     * body may be non-JSON (a broadcast document's plaintext) — {@see \Allus\CompanyData\Client::documentFile}.
+     * Auth/refresh/retry handling is identical to {@see get}.
+     */
+    public function getRaw(string $path): string
+    {
+        /** @var string */
+        return $this->request('GET', $path, null, null, null, null, true);
+    }
+
+    /**
      * POST {@code $path} with a JSON body or raw bytes → parsed body.
      *
      * @param array<string,mixed>|list<mixed>|null $jsonBody
@@ -208,6 +219,7 @@ final class HttpClient
         ?array $jsonBody = null,
         ?string $rawBody = null,
         ?string $contentType = null,
+        bool $raw = false,
     ): array|string {
         $url = $this->url($path);
         $wantsXml = $this->config->format === 'xml';
@@ -239,7 +251,7 @@ final class HttpClient
             $status = $resp->status;
 
             if ($status >= 200 && $status < 300) {
-                return $this->parseBody($resp, $wantsXml);
+                return $raw ? $resp->body : $this->parseBody($resp, $wantsXml);
             }
 
             if ($status === 401) {

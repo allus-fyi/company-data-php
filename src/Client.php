@@ -10,6 +10,7 @@ use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Errors\DecryptError;
 use Allus\CompanyData\Errors\RateLimitError;
 use Allus\CompanyData\Errors\ValidationError;
+use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Connection;
@@ -839,6 +840,31 @@ final class Client
     }
 
     /**
+     * #491 gap 2: download a document's file BYTES. {@code document()} returns metadata only. This GETs
+     * {@code /documents/{id}/file} and branches on the document's storage mode (server contract):
+     *  - a BROADCAST (non-private) document is stored plaintext and served as RAW bytes → returned as-is;
+     *  - a PER-PERSON / private document is encrypted to the RECIPIENT's key and served as
+     *    {@code {"encrypted":true,"value":{"_enc":1,…}}} — the company CANNOT decrypt that with its service
+     *    key, so this fails clearly (ApiError {@code documents.recipient_encrypted}) rather than attempting a
+     *    doomed service-key decrypt. For a generated flow contract's OWN copy the company uses
+     *    {@see flowRunDocument} — that copy IS service-key-encrypted.
+     */
+    public function documentFile(string $documentId): string
+    {
+        $raw = $this->http->getRaw(self::DOCUMENTS . '/' . rawurlencode($documentId) . '/file');
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded) && ($decoded['encrypted'] ?? false)) {
+            throw new ApiError(
+                0,
+                'documents.recipient_encrypted',
+                'This document is encrypted to its recipient and is not readable with the company service key. '
+                . 'For a generated flow contract, use flowRunDocument($runId) to download the company copy.',
+            );
+        }
+        return $raw; // broadcast / plaintext bytes
+    }
+
+    /**
      * Set a document's lifecycle status
      * (offering|ready_to_sign|active|active_but_ending|ended).
      */
@@ -953,6 +979,55 @@ final class Client
     {
         $body = $this->http->get(self::FLOW_RUNS . '/' . rawurlencode($runId));
         return FlowRun::fromApi(is_array($body) ? $body : []);
+    }
+
+    /**
+     * #491 gap 1: a completed run's DECRYPTED answers as {@code [slug => plaintext]}. Accepts a
+     * loaded {@see FlowRun} or a run id (fetched via {@see flowRun}). Reads the company's service-key
+     * answer copies — the intended top-level accessor for a finished run's answers (the private
+     * {@see decryptRunAnswers} it wraps is otherwise reachable only inside {@see processFlowRun},
+     * which returns an already-completed run untouched, so its answers were previously unreadable).
+     *
+     * @return array<string,string>
+     */
+    public function flowRunAnswers(FlowRun|string $run): array
+    {
+        $flowRun = $run instanceof FlowRun ? $run : $this->flowRun($run);
+        return $this->decryptRunAnswers($flowRun);
+    }
+
+    /**
+     * #491 gap 2: download the company's OWN copy of a run's generated flow contract — the PLAINTEXT
+     * file bytes. GETs {@code /flow-runs/{runId}/document/file}, which serves the company-party copy
+     * encrypted to the SERVICE key (unlike {@see documentFile}'s recipient-targeted copy), so the same
+     * {@see BinaryHandle} the slot-file download uses decrypts it → the {@code {"file":"data:…;base64,…"}}
+     * envelope → the file bytes. 404 (ApiError) when the run has not generated a document yet.
+     */
+    public function flowRunDocument(string $runId): string
+    {
+        return (new BinaryHandle(
+            valueUrl: self::BASE . '/flow-runs/' . rawurlencode($runId) . '/document/file',
+            fetch: fn (string $u): array|string => $this->binaryFetch($u),
+            decrypt: fn (array|string $w): string => $this->decryptValue($w),
+        ))->bytes();
+    }
+
+    /**
+     * #491 gap 3: this client's OWN identity — {@code ['company_user_id' => ..., 'service_id' => ...]}
+     * from {@code GET /api/company-data/whoami}. The COMPANY party of a {@see triggerFlowRun} binding
+     * must bind to {@code company_user_id} (the person party's user_id comes from the connection), so
+     * without this the company-side binding was unconstructible through the SDK.
+     *
+     * @return array{company_user_id: string, service_id: string}
+     */
+    public function identity(): array
+    {
+        $body = $this->http->get(self::BASE . '/whoami');
+        $arr = is_array($body) ? $body : [];
+        return [
+            'company_user_id' => (string) ($arr['company_user_id'] ?? ''),
+            'service_id' => (string) ($arr['service_id'] ?? ''),
+        ];
     }
 
     /**
