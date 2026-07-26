@@ -94,7 +94,7 @@ Requires **PHP ≥ 8.1**, with `ext-openssl` and `ext-json` (both standard).
 
 ```bash
 composer require allus/company-data
-# or, working from this repo:  composer install     # from sdks/php/
+# or, working from this repo:  composer install     # from the repo root
 php -r 'require "vendor/autoload.php"; echo Allus\CompanyData\Client::class, PHP_EOL;'
 ```
 

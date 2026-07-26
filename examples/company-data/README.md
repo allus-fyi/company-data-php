@@ -18,7 +18,8 @@ raw platform HTTP.
 ## Run it — one command
 
 ```bash
-cd sdks/php/examples/company-data
+git clone https://github.com/allus-fyi/company-data-php
+cd company-data-php/examples/company-data
 composer start
 ```
 
@@ -78,46 +79,46 @@ scenario's setup checklist names the exact portal steps (create the service +
 download its PEM, register a data client on it, configure request fields, connect
 a test person).
 
-> **Portal prerequisite / interim (2026-07-24).** `portal.allus.fyi` is **not
-> deployed yet** — the portal deploy is the prerequisite for this deployed-default
-> recipe. Until it lands, the documented interim is to run the **local portal UI
-> against the cluster API**: set `VITE_API_URL=https://api.allme.fyi` in
-> `allus/.env` and start the portal locally, so every portal step still lands on
-> the deployed platform the scenarios run against.
-
 ---
 
-## The webhook scenario — deployed (tunnel) vs local (native)
+## The webhook scenario — setup first, then no tunnel needed
 
-The webhook receiver is dual-mode:
+Like the other scenarios this one is **setup-first**: register a webhook on your
+service in the portal, then paste its **webhook id** and one-time **HMAC secret**
+into the scenario before starting it — **the run refuses to start without them**
+(`Server.php` answers `409 not_configured`). Set `encrypt_payload` OFF; this
+example holds no account private key.
 
-- **Local stack** — the local API's delivery worker reaches `localhost` directly,
-  so register **`http://localhost:8091/webhook`** as the service webhook. This is
-  the only mode where inbound webhooks work **without a tunnel**.
-- **Deployed platform** — the cluster cannot reach your `localhost`, so open one
-  tunnel and register its public URL:
+Once it is started, **no tunnel is needed** to see events: every run **polls the
+change feed** as an always-works fallback (labeled `feed` vs `webhook`), so events
+appear whether or not real inbound webhook deliveries can reach you.
 
-  ```bash
-  cloudflared tunnel --url http://localhost:8091
-  ```
-
-  Register the printed public URL with **`/webhook`** appended as the service
-  webhook. Set **`encrypt_payload` OFF** (this example holds no account private
-  key; an encrypted body cannot be decrypted here). Copy the **webhook id** and the
-  one-time **HMAC secret** shown at registration into the scenario's inputs.
-
-Either way, the same run **also polls the change feed** as an always-works
-fallback (labeled `feed` vs `webhook`), so events still appear even with no tunnel.
 Note the two paths differ in shape: the webhook stream delivers each event, while
 the pull feed is a dedup-upsert **state** feed (one latest-state row per identity),
 so the fallback can look like it "collapsed" events — that is expected.
+
+### Optional / advanced — real inbound delivery via a tunnel
+
+To exercise a genuine `POST /webhook` from the platform, expose your local port
+with a tunnel and register its public URL:
+
+```bash
+cloudflared tunnel --url http://localhost:8091
+```
+
+Register the printed public URL with **`/webhook`** appended as the service
+webhook. Set **`encrypt_payload` OFF** (this example holds no account private key;
+an encrypted body cannot be decrypted here). Copy the **webhook id** and the
+one-time **HMAC secret** shown at registration into the scenario's inputs.
+
+(Against a local stack the local API's delivery worker reaches `localhost`
+directly, so you can register **`http://localhost:8091/webhook`** with no tunnel.)
 
 ---
 
 ## Secondary target — a local stack
 
-Running against a **local stack** instead is a documented secondary option (see
-`docs/reference/software.html`). In the browser, switch the advanced **API url** to
+Running against a **local stack** instead is an optional secondary target. In the browser, switch the advanced **API url** to
 `http://localhost:8070`. No file in **this** example changes.
 
 ---

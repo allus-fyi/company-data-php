@@ -17,7 +17,8 @@ demonstration.
 ## Run it — one command
 
 ```bash
-cd sdks/php/examples/identity
+git clone https://github.com/allus-fyi/company-data-php
+cd company-data-php/examples/identity
 composer start
 ```
 
@@ -78,22 +79,14 @@ enabled on their allme account for the 2FA scenarios).
 Register the redirect URI **`http://localhost:8091/callback`** on every OAuth app
 you create for these scenarios (adjust the port if you set `PORT`).
 
-> **Portal prerequisite / interim (2026-07-24).** `portal.allus.fyi` is **not
-> deployed yet** — the portal deploy is the prerequisite for this deployed-default
-> recipe. Until it lands, the documented interim is to run the **local portal UI
-> against the cluster API**: set one line in `allus/.env` —
-> `VITE_API_URL=https://api.allme.fyi` — and start the portal locally (it proxies
-> `/api` + `/oauth2` to that URL), so every portal step still lands on the same
-> deployed platform the scenarios run against. A physical phone with the allme
-> app (project practice: physical devices) reaches the deployed platform
-> naturally.
+A physical phone with the allme app reaches the deployed platform naturally — no
+setup needed.
 
 ---
 
 ## Secondary target — a local stack
 
-Running against a **local stack** instead is a documented secondary option (see
-`docs/reference/software.html`). In the browser, switch the advanced inputs to
+Running against a **local stack** instead is an optional secondary target. In the browser, switch the advanced inputs to
 the local URLs (API `http://localhost:8070`, authorize base
 `http://localhost:5174/auth`). No file in **this** example changes.
 
