@@ -2,16 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Allus\CompanyDataExample;
+namespace Allus\Examples\CompanyData;
 
 use Allus\CompanyData\Client;
 use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Errors\WebhookError;
 use Allus\CompanyData\Model\Change;
+use Allus\Examples\Family;
+use Allus\Examples\Response;
+use Allus\Examples\Runtime;
 
 /**
- * The company-data demo backend (spec §2/§3, config-file amendment). One class, one worker: HTTP
- * dispatch → handler → intended SDK surface ONLY (no raw platform HTTP, no SDK internals).
+ * The COMPANY-DATA scenario handlers (spec §2/§3, config-file amendment). Each handler runs the intended
+ * top-level SDK surface ONLY (no raw platform HTTP, no SDK internals).
  *
  * Five scenarios, all namespaced companydata:* (spec §3):
  *   read        — Client::connections()        → connection-grouped decrypted values
@@ -21,16 +24,13 @@ use Allus\CompanyData\Model\Change;
  *                                                  fallback; ONE accumulating run keyed by the webhook id
  *   documents   — Client::createDocument() ×6    → the six document/contract types
  *
- * Settings flow (amendment): the browser POSTs a scenario's setup values to
- * POST /api/scenarios/{id}/config, which writes them to a canonical SDK config FILE
- * (.runtime/config/{sid}.json). /start builds the Client from that file (Client::fromConfig →
- * Config::fromFile) and runs OFF it — exactly as a real integrator wires the SDK. A /start with no saved
- * config → 409 not_configured.
+ * Settings flow (amendment): the browser POSTs a scenario's setup values to /config, which writes them to
+ * a canonical SDK config FILE (.runtime/config/{sid}.json). start() builds the Client from that file
+ * (Client::fromConfig → Config::fromFile) and runs OFF it. A /start with no saved config → 409.
  */
-final class Server
+final class Handlers implements Family
 {
-    public const CONTRACT_VERSION = 3;
-    public const SDK = 'php';
+    public const FAMILY = 'companydata';
 
     /** id => "runnable". Every company-data scenario runs synchronously (data) or accumulates (webhook). */
     private const SCENARIOS = [
@@ -52,64 +52,18 @@ final class Server
 
     private const DEFAULT_API_URL = 'https://api.allme.fyi';
 
-    public function __construct(
-        private readonly Runtime $rt,
-        private readonly string $frontendDir,
-        private readonly string $sdkVersion,
-    ) {
+    public function __construct(private readonly Runtime $rt)
+    {
     }
 
-    // ── entry point ────────────────────────────────────────────────────────
-
-    public function handle(): void
+    /** @return list<array{id:string,kind:string}> */
+    public function scenarios(): array
     {
-        $this->rt->ensureDirs();
-        $this->rt->sweep(); // lazy TTL sweep on every request (spec §3)
-
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $path = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
-
-        try {
-            if ($path === '/api/meta' && $method === 'GET') {
-                $this->meta();
-            } elseif ($path === '/webhook' && $method === 'POST') {
-                $this->webhook(); // PUBLIC inbound delivery (not under /api/) — spec §2
-            } elseif ($path === '/api/clear' && $method === 'POST') {
-                $this->rt->clearAll();
-                $this->json(['ok' => true]);
-            } elseif (preg_match('#^/api/scenarios/([a-z:]+)/config$#', $path, $m) && $method === 'POST') {
-                $this->config($m[1]);
-            } elseif (preg_match('#^/api/scenarios/([a-z:]+)/start$#', $path, $m) && $method === 'POST') {
-                $this->start($m[1]);
-            } elseif (preg_match('#^/api/scenarios/([a-z:]+)/clear$#', $path, $m) && $method === 'POST') {
-                $this->rt->clearScenario($m[1]);
-                $this->json(['ok' => true]);
-            } elseif (preg_match('#^/api/runs/([0-9a-f]{32})$#', $path, $m) && $method === 'GET') {
-                $this->run($m[1]);
-            } elseif (str_starts_with($path, '/api/')) {
-                $this->json(['error' => 'not_found'], 404);
-            } else {
-                $this->serveStatic($path);
-            }
-        } catch (\Throwable $e) {
-            $this->json(['error' => 'server_error', 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    // ── GET /api/meta ────────────────────────────────────────────────────────
-
-    private function meta(): void
-    {
-        $scenarios = [];
+        $out = [];
         foreach (self::SCENARIOS as $id => $kind) {
-            $scenarios[] = ['id' => $id, 'kind' => $kind];
+            $out[] = ['id' => $id, 'kind' => $kind];
         }
-        $this->json([
-            'sdk' => self::SDK,
-            'sdkVersion' => $this->sdkVersion,
-            'contractVersion' => self::CONTRACT_VERSION,
-            'scenarios' => $scenarios,
-        ]);
+        return $out;
     }
 
     // ── POST /api/scenarios/{id}/config (amendment) ────────────────────────────
@@ -120,14 +74,14 @@ final class Server
      * PEM (by path) + passphrase. The webhook scenario adds the webhooks:{id:secret} map (the SDK selects
      * the secret by the X-Allus-Webhook-Id header) and records the webhook id in a meta sidecar (the
      * routing key /start needs). The documents scenario records the target share code in the sidecar.
+     *
+     * @param array<string,mixed> $in
      */
-    private function config(string $id): void
+    public function config(string $id, array $in): Response
     {
         if (!isset(self::SCENARIOS[$id])) {
-            $this->json(['error' => 'not_found'], 404);
-            return;
+            return Response::json(['error' => 'not_found'], 404);
         }
-        $in = $this->body();
 
         // Canonical SDK config — the service role for every company-data scenario (sdk.html §2).
         $cfg = [
@@ -166,40 +120,35 @@ final class Server
         $configPath = $this->rt->writeConfig($id, $cfg);
         $this->rt->writeConfigMeta($id, $meta);
 
-        $this->json(['ok' => true, 'configPath' => $configPath]);
+        return Response::json(['ok' => true, 'configPath' => $configPath]);
     }
 
     // ── POST /api/scenarios/{id}/start ─────────────────────────────────────────
 
-    private function start(string $id): void
+    public function start(string $id): Response
     {
         if (!isset(self::SCENARIOS[$id])) {
-            $this->json(['error' => 'not_found'], 404);
-            return;
+            return Response::json(['error' => 'not_found'], 404);
         }
         if (!$this->rt->hasConfig($id)) {
             // The run is built from the persisted config file, not the request body (amendment).
-            $this->json(['error' => 'not_configured'], 409);
-            return;
+            return Response::json(['error' => 'not_configured'], 409);
         }
 
         switch ($id) {
             case self::READ:
-                $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doRead($c, $calls));
-                return;
+                return $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doRead($c, $calls));
             case self::DEFINITIONS:
-                $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doDefinitions($c, $calls));
-                return;
+                return $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doDefinitions($c, $calls));
             case self::CHANGES:
-                $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doChanges($c, $calls));
-                return;
+                return $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doChanges($c, $calls));
             case self::DOCUMENTS:
-                $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doDocuments($c, $calls));
-                return;
+                return $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doDocuments($c, $calls));
             case self::WEBHOOK:
-                $this->startWebhook();
-                return;
+                return $this->startWebhook();
         }
+
+        return Response::json(['error' => 'not_found'], 404);
     }
 
     /**
@@ -208,18 +157,18 @@ final class Server
      *
      * @param callable(Client, array<int,string>): array<string,mixed> $do
      */
-    private function dataRun(string $id, callable $do): void
+    private function dataRun(string $id, callable $do): Response
     {
         $runId = $this->rt->newRunId();
         $calls = [];
         try {
             $client = Client::fromConfig($this->rt->configPathFor($id));
             $result = $do($client, $calls);
-            $this->rt->writeRun($runId, ['scenario' => $id, 'status' => 'done', 'result' => $result, 'calls' => $calls]);
+            $this->rt->writeRun($runId, ['family' => self::FAMILY, 'scenario' => $id, 'status' => 'done', 'result' => $result, 'calls' => $calls]);
         } catch (\Throwable $e) {
-            $this->rt->writeRun($runId, ['scenario' => $id, 'status' => 'failed', 'error' => $e->getMessage(), 'calls' => $calls]);
+            $this->rt->writeRun($runId, ['family' => self::FAMILY, 'scenario' => $id, 'status' => 'failed', 'error' => $e->getMessage(), 'calls' => $calls]);
         }
-        $this->json(['runId' => $runId, 'action' => ['type' => 'data']]);
+        return Response::json(['runId' => $runId, 'action' => ['type' => 'data']]);
     }
 
     /**
@@ -387,15 +336,15 @@ final class Server
      * there is NO long-poll (it would wedge the single worker). Events arrive via POST /webhook and via a
      * per-poll drainBatch() feed fallback; the frontend reads the growing list through GET /api/runs.
      */
-    private function startWebhook(): void
+    private function startWebhook(): Response
     {
         $webhookId = (string) ($this->rt->readConfigMeta(self::WEBHOOK)['webhook_id'] ?? '');
         if ($webhookId === '') {
-            $this->json(['error' => 'not_configured'], 409);
-            return;
+            return Response::json(['error' => 'not_configured'], 409);
         }
         $runId = $this->rt->newRunId();
         $this->rt->writeRun($runId, [
+            'family' => self::FAMILY,
             'scenario' => self::WEBHOOK,
             'status' => 'pending', // accumulating — the v1 enum is unchanged (spec §3)
             'webhookId' => $webhookId,
@@ -405,7 +354,7 @@ final class Server
             'calls' => ['(webhook run started — POST /webhook receives; each poll also drainBatch()s the feed)'],
         ]);
         $this->rt->writeRoute($webhookId, $runId);
-        $this->json(['runId' => $runId, 'action' => ['type' => 'none']]);
+        return Response::json(['runId' => $runId, 'action' => ['type' => 'none']]);
     }
 
     /**
@@ -418,32 +367,29 @@ final class Server
      *       401, since the signature was valid.
      * All accepted-and-dropped cases return 200 because the platform worker counts EXACTLY 200 as success
      * (202/401/other = failure → retry + circuit-break).
+     *
+     * @param array<string,string> $headers
      */
-    private function webhook(): void
+    public function webhook(string $rawBody, array $headers): Response
     {
-        $rawBody = (string) file_get_contents('php://input');
-        $headers = $this->requestHeaders();
         $webhookId = $this->header($headers, 'X-Allus-Webhook-Id');
 
         $route = $this->rt->readRoute();
         if ($route === null || $webhookId === null || $webhookId !== $route['webhookId']) {
-            $this->text('discarded: unknown or stale webhook id', 200);
-            return;
+            return Response::text('discarded: unknown or stale webhook id', 200);
         }
         $run = $this->rt->readRun($route['runId']);
         if ($run === null) {
-            $this->text('discarded: no active webhook run', 200);
-            return;
+            return Response::text('discarded: no active webhook run', 200);
         }
 
         $client = Client::fromConfig($this->rt->configPathFor(self::WEBHOOK));
         $this->recordCall($run, 'Client::verifyWebhook');
         if (!$client->verifyWebhook($rawBody, $headers)) {
-            // A genuine signature failure — persist the attempted verify so the calls trace is
-            // truthful even on the reject path (spec §4).
+            // A genuine signature failure — persist the attempted verify so the calls trace is truthful
+            // even on the reject path (spec §4).
             $this->rt->writeRun($route['runId'], $run);
-            $this->text('signature verification failed', 401);
-            return;
+            return Response::text('signature verification failed', 401);
         }
         try {
             $this->recordCall($run, 'Client::parseWebhook');
@@ -461,25 +407,22 @@ final class Server
             ];
         }
         $this->rt->writeRun($route['runId'], $run);
-        $this->text('ok', 200);
+        return Response::text('ok', 200);
     }
 
     // ── GET /api/runs/{runId} ──────────────────────────────────────────────────
 
-    private function run(string $runId): void
+    /**
+     * @param array<string,mixed> $run
+     */
+    public function run(string $runId, array $run): Response
     {
-        $run = $this->rt->readRun($runId);
-        if ($run === null) {
-            $this->json(['error' => 'not_found'], 404);
-            return;
-        }
-
         // The accumulating webhook run: each poll also does ONE immediate drainBatch() raw feed fetch
         // (NOT processChanges(), which loops the pump to empty and could stall the single worker) so
         // events generated AFTER start still appear in deployed-no-tunnel mode (spec §2/§3).
         if (($run['scenario'] ?? '') === self::WEBHOOK) {
             $run = $this->webhookFeedFallback($runId, $run);
-            $out = [
+            return Response::json([
                 'status' => $run['status'] ?? 'pending',
                 'calls' => $run['calls'] ?? [],
                 'result' => [
@@ -487,9 +430,7 @@ final class Server
                     'events' => $run['events'] ?? [],
                     'unparseable' => (int) ($run['unparseable'] ?? 0),
                 ],
-            ];
-            $this->json($out);
-            return;
+            ]);
         }
 
         $out = ['status' => $run['status'] ?? 'pending', 'calls' => $run['calls'] ?? []];
@@ -499,7 +440,7 @@ final class Server
         if (isset($run['error'])) {
             $out['error'] = $run['error'];
         }
-        $this->json($out);
+        return Response::json($out);
     }
 
     /**
@@ -523,8 +464,8 @@ final class Server
         }
         try {
             $client = Client::fromConfig($this->rt->configPathFor(self::WEBHOOK));
-            // Every poll ATTEMPTS the feed pull — record the call now (deduped), so an empty poll
-            // still reports the drainBatch it performed rather than claiming no call (spec §4).
+            // Every poll ATTEMPTS the feed pull — record the call now (deduped), so an empty poll still
+            // reports the drainBatch it performed rather than claiming no call (spec §4).
             $drainNew = $this->recordCall($run, 'Client::drainBatch');
             $appended = false;
             foreach ($client->drainBatch() as $change) {
@@ -549,10 +490,10 @@ final class Server
     }
 
     /**
-     * Append an SDK-call name to a run's "what just happened" trace, deduped so the panel stays small
-     * and readable no matter how many deliveries/polls a call is attempted across. Returns true when the
-     * name was newly added (so the caller can persist on that transition). Record a call when it is
-     * ATTEMPTED — the trace is a teaching outcome and must be truthful on every path (spec §4; plan §"records its calls truthfully").
+     * Append an SDK-call name to a run's "what just happened" trace, deduped so the panel stays small and
+     * readable no matter how many deliveries/polls a call is attempted across. Returns true when the name
+     * was newly added (so the caller can persist on that transition). Record a call when it is ATTEMPTED —
+     * the trace is a teaching outcome and must be truthful on every path (spec §4).
      *
      * @param array<string,mixed> $run
      */
@@ -643,42 +584,7 @@ final class Server
         return (string) $v;
     }
 
-    // ── input / HTTP plumbing ────────────────────────────────────────────────
-
-    /** @return array<string,mixed> */
-    private function body(): array
-    {
-        $raw = file_get_contents('php://input');
-        if ($raw === false || $raw === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        return is_array($decoded) ? $decoded : [];
-    }
-
-    /**
-     * Request headers as a name → value map (for the SDK webhook verify/parse, which look them up
-     * case-insensitively). Uses getallheaders() when available; else reconstructs from $_SERVER.
-     *
-     * @return array<string,string>
-     */
-    private function requestHeaders(): array
-    {
-        if (function_exists('getallheaders')) {
-            $h = getallheaders();
-            if (is_array($h)) {
-                return array_map('strval', $h);
-            }
-        }
-        $out = [];
-        foreach ($_SERVER as $k => $v) {
-            if (str_starts_with((string) $k, 'HTTP_')) {
-                $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr((string) $k, 5)))));
-                $out[$name] = (string) $v;
-            }
-        }
-        return $out;
-    }
+    // ── input helpers ────────────────────────────────────────────────────────
 
     /**
      * Case-insensitive header lookup.
@@ -694,45 +600,6 @@ final class Server
             }
         }
         return null;
-    }
-
-    /** @param array<string,mixed> $data */
-    private function json(array $data, int $status = 200): void
-    {
-        http_response_code($status);
-        header('Content-Type: application/json');
-        echo json_encode($data, JSON_UNESCAPED_SLASHES);
-    }
-
-    private function text(string $body, int $status = 200): void
-    {
-        http_response_code($status);
-        header('Content-Type: text/plain; charset=utf-8');
-        echo $body;
-    }
-
-    private function serveStatic(string $path): void
-    {
-        $rel = $path === '/' ? '/index.html' : $path;
-        $full = realpath($this->frontendDir . $rel);
-        $root = realpath($this->frontendDir);
-
-        // Path-traversal guard + SPA fallback to index.html.
-        if ($full === false || $root === false || !str_starts_with($full, $root) || !is_file($full)) {
-            $index = $this->frontendDir . '/index.html';
-            if (is_file($index)) {
-                header('Content-Type: text/html; charset=utf-8');
-                readfile($index);
-                return;
-            }
-            http_response_code(404);
-            header('Content-Type: text/plain');
-            echo "bundle not found";
-            return;
-        }
-
-        header('Content-Type: ' . self::mime($full));
-        readfile($full);
     }
 
     /**
@@ -763,25 +630,5 @@ final class Server
         }
         $pdf .= "trailer\n<< /Size " . (count($objs) + 1) . " /Root 1 0 R >>\nstartxref\n$xrefPos\n%%EOF";
         return $pdf;
-    }
-
-    private static function mime(string $path): string
-    {
-        return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-            'html' => 'text/html; charset=utf-8',
-            'js', 'mjs' => 'text/javascript; charset=utf-8',
-            'css' => 'text/css; charset=utf-8',
-            'json', 'map' => 'application/json; charset=utf-8',
-            'svg' => 'image/svg+xml',
-            'png' => 'image/png',
-            'jpg', 'jpeg' => 'image/jpeg',
-            'gif' => 'image/gif',
-            'ico' => 'image/x-icon',
-            'woff' => 'font/woff',
-            'woff2' => 'font/woff2',
-            'ttf' => 'font/ttf',
-            'webp' => 'image/webp',
-            default => 'application/octet-stream',
-        };
     }
 }

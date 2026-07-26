@@ -15,15 +15,12 @@ request slots you configured.
 > This SDK is one of six language ports that share an identical API surface.
 > This manual is the PHP view of it.
 
-> **Examples:** runnable websites demonstrating this SDK live under `examples/`,
-> each one command (`composer start`) and a browser:
-> [`examples/identity/`](examples/identity/) — the identity scenarios (Sign in with
-> allme, OIDC login, 2FA by allme);
-> [`examples/flow/`](examples/flow/) — contract flows driven end-to-end; and
-> [`examples/company-data/`](examples/company-data/) — the regular company-data
-> surface (connections read, request fields, the change feed, webhooks, documents).
-> See their READMEs ([identity](examples/identity/README.md),
-> [flow](examples/flow/README.md), [company-data](examples/company-data/README.md)).
+> **Example:** one runnable website demonstrating this SDK lives in
+> [`examples/`](examples/) — one command (`composer start`) and a browser. It serves
+> all three scenario families as sections of a single portal: **identity** (Sign in
+> with allme, OIDC login, 2FA by allme), **company-data** (connections read, request
+> fields, the change feed, webhooks, documents), and **flow** (contract flows driven
+> end-to-end). See its [README](examples/README.md).
 
 **Contents:** [TL;DR — fetch new updates](#tldr--fetch-new-updates) ·
 [Quickstart](#quickstart) · [Every call](#every-call) ·
@@ -520,8 +517,8 @@ identity(): array                             // #491 gap 3 — this client's {c
 > **Example:** a runnable website that drives a contract flow end-to-end through
 > these calls — trigger, type-checked step filling, a person turn on the phone, then
 > the decrypted answers + downloaded document — is in
-> [`examples/flow/`](examples/flow/): one command (`composer start`) and a browser.
-> See its [README](examples/flow/README.md).
+> the **flow** section of [`examples/`](examples/): one command (`composer start`)
+> and a browser. See its [README](examples/README.md).
 
 ### `updateDocumentStatus` / `updateDocumentMetadata` / `deleteDocument`
 

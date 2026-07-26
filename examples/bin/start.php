@@ -3,25 +3,25 @@
 declare(strict_types=1);
 
 /**
- * One-command launcher for the identity example (spec §2, §3; plan Phase 2).
+ * One-command launcher for the whole example test suite (#494 — one server, all three scenario families).
  *
  * Steps:
  *   1. wipe .runtime/ (fresh state each boot)
  *   2. composer install if vendor/ is missing
  *   3. on a missing bundle: fetch the pinned frontend release (frontend.lock), VERIFY sha256, unpack to
- *      .frontend/  (a present, verified bundle is a cache hit — nothing is re-fetched)
+ *      .frontend/<tag>/ (a present, verified bundle is a cache hit — nothing is re-fetched)
  *   4. assert the bundle's contract.json version == the backend's implemented contractVersion
  *   5. refuse a busy port with a clear message
  *   6. exec `php -S localhost:${PORT:-8091} router.php` — SINGLE WORKER (PHP_CLI_SERVER_WORKERS unset)
  */
 
-const CONTRACT_VERSION = 1; // must equal Server::CONTRACT_VERSION
+const CONTRACT_VERSION = 3; // must equal Server::CONTRACT_VERSION
 const RELEASE_BASE = 'https://github.com/allme-sdk/example-test-suite/releases/download';
 
 $base = dirname(__DIR__);
 chdir($base);
 
-fwrite(STDERR, "identity example — starting up\n");
+fwrite(STDERR, "allus SDK examples — starting up\n");
 
 // 1. fresh runtime state
 rrmdir($base . '/.runtime');
@@ -79,7 +79,7 @@ if ($sock === false) {
 fclose($sock);
 
 // 6. serve — SINGLE WORKER (do NOT set PHP_CLI_SERVER_WORKERS)
-fwrite(STDERR, "serving http://localhost:{$port}  (Ctrl-C to stop)\n");
+fwrite(STDERR, "serving http://localhost:{$port}  (all three scenario families; Ctrl-C to stop)\n");
 $cmd = escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg("localhost:{$port}") . ' ' . escapeshellarg('router.php');
 passthru($cmd, $rc);
 exit($rc);

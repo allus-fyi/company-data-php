@@ -1,8 +1,0 @@
-# Transients — never committed (vendored libs + runtime state + fetched bundle).
-# composer.lock IS committed (#478 finding 4 / spec §4.5): `composer install` pins the
-# reviewed third-party OIDC library exactly, so two fresh installs run the same build.
-/vendor/
-/.runtime/
-/.frontend/
-/.frontend.download.tar.gz
-.DS_Store

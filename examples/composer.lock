@@ -4,15 +4,15 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "f94f72661df1723baca534bf86463b20",
+    "content-hash": "7918c97616db2d622bee27420adf77f9",
     "packages": [
         {
             "name": "allus/company-data",
-            "version": "0.0.13",
+            "version": "0.0.14",
             "dist": {
                 "type": "path",
-                "url": "../..",
-                "reference": "a29b4d160c8ce4e64bdc0ca3f30ac6edc010ff92"
+                "url": "..",
+                "reference": "bb8f9ee0c6bef989a73a083e5860915b2e1ba2ec"
             },
             "require": {
                 "ext-json": "*",

@@ -1,9 +1,0 @@
-# Transients — never committed (vendored SDK + runtime state + fetched bundle).
-# No third-party runtime deps here (the SDK is a local path repo), so composer.lock
-# pins nothing external and is not committed.
-/vendor/
-/composer.lock
-/.runtime/
-/.frontend/
-/.frontend.download.tar.gz
-.DS_Store

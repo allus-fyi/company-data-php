@@ -2,25 +2,30 @@
 
 declare(strict_types=1);
 
-namespace Allus\IdentityExample;
+namespace Allus\Examples;
 
 /**
- * Cross-request state for the demo backend (spec §3, config-file amendment).
+ * Cross-request state for the whole example test suite — shared by all three scenario families (spec §3,
+ * config-file amendment; #494 one-server restructure).
  *
  * Single-worker server → requests serialize; there is NO concurrency to guard, so there are NO locks,
- * NO tombstones and NO burn-on-read. Everything lives under {@see $runtimeDir} (git-ignored, wiped at
+ * NO tombstones and NO burn-on-read. Everything lives under ONE {@see $runtimeDir} (git-ignored, wiped at
  * startup):
- *   - config/{id}.json       — the canonical SDK config file a scenario runs OFF (written by
- *                              POST /api/scenarios/{id}/config from the browser settings; NOT TTL-swept)
- *   - config/{id}.meta.json  — demo-only run parameters that are not SDK Config fields
- *                              (authorize_base, one_time claims, share_code, context)
- *   - config/keys/<sha1>.pem — the private-key file(s) a config references by path (mode 0600)
- *   - runs/{runId}.json      — PKCE verifier / state / nonce / outcome for one run
+ *   - config/{sid}.json        — the canonical SDK config file a scenario runs OFF (written by
+ *                                POST /api/scenarios/{id}/config from the browser settings; NOT TTL-swept)
+ *   - config/{sid}.meta.json   — demo-only run parameters that are not SDK Config fields (authorize base,
+ *                                one_time claims, share code, context, flow/connection ids, webhook id …)
+ *   - config/keys/<sha1>.pem   — the private-key file(s) a config references by path (mode 0600)
+ *   - runs/{runId}.json        — one run's PKCE/state/nonce/outcome (+ its family + public scenario id)
+ *   - webhook-route.json       — the SINGLE active company-data webhook run {webhookId, runId} (spec §2)
+ *   - cache/                   — the SDK pump's buffer + dead-letters (company-data Config.cacheDir)
  *
- * Config files persist across runs — they are configuration, not runs, so they are removed ONLY by a
- * Clear or the startup wipe, never by the TTL. Run files are written via write-temp + atomic rename
- * (crash hygiene only) and removed by their 30-minute TTL (lazy sweep on any request, which also
- * collects orphaned *.tmp files), by Clear, or by the startup wipe.
+ * Config files are keyed by the PUBLIC scenario id via {@see sid()} (e.g. "1", "flow:run",
+ * "companydata:read") so the three families never collide in the one tree. Config files persist across
+ * runs — they are configuration, not runs, so they are removed ONLY by a Clear or the startup wipe, never
+ * by the TTL. Run files are written via write-temp + atomic rename (crash hygiene only) and removed by
+ * their 30-minute TTL (lazy sweep on any request, which also collects orphaned *.tmp files), by Clear, or
+ * by the startup wipe.
  */
 final class Runtime
 {
@@ -31,6 +36,8 @@ final class Runtime
     public readonly string $runsDir;
     public readonly string $configDir;
     public readonly string $configKeysDir;
+    public readonly string $cacheDir;
+    public readonly string $routePath;
 
     public function __construct(string $baseDir)
     {
@@ -38,19 +45,23 @@ final class Runtime
         $this->runsDir = $this->runtimeDir . '/runs';
         $this->configDir = $this->runtimeDir . '/config';
         $this->configKeysDir = $this->configDir . '/keys';
+        // The company-data SDK pump persists its buffer + dead-letters here (Config.cacheDir → this path),
+        // so Clear / the startup wipe removes it and the "writes only under .runtime/" property holds.
+        $this->cacheDir = $this->runtimeDir . '/cache';
+        $this->routePath = $this->runtimeDir . '/webhook-route.json';
     }
 
     /** Ensure the runtime directories exist (idempotent). */
     public function ensureDirs(): void
     {
-        foreach ([$this->runtimeDir, $this->runsDir, $this->configDir, $this->configKeysDir] as $d) {
+        foreach ([$this->runtimeDir, $this->runsDir, $this->configDir, $this->configKeysDir, $this->cacheDir] as $d) {
             if (!is_dir($d)) {
                 @mkdir($d, 0700, true);
             }
         }
     }
 
-    /** Startup wipe: remove ALL runtime state (configs + keys + runs), then recreate the empty tree. */
+    /** Startup wipe: remove ALL runtime state (configs + keys + runs + cache + route), then recreate. */
     public function wipeAll(): void
     {
         $this->rmTree($this->runtimeDir);
@@ -60,8 +71,9 @@ final class Runtime
     // ── lazy TTL sweep ──────────────────────────────────────────────────────
 
     /**
-     * Remove expired run files and orphaned *.tmp files. Called on every request (spec §3).
-     * Config files carry NO TTL — they are wiped only at startup or by Clear.
+     * Remove expired run files and orphaned *.tmp files. Called on every request (spec §3). When the
+     * active webhook run expires, its routing record is dropped too (a stale record never routes to a
+     * burned run). Config files carry NO TTL — they are wiped only at startup or by Clear.
      */
     public function sweep(): void
     {
@@ -75,23 +87,35 @@ final class Runtime
                 @unlink($path);
             }
         }
+        // Drop the routing record if its run is gone (expired/swept above).
+        $route = $this->readRoute();
+        if ($route !== null && !is_file($this->runsDir . '/' . $route['runId'] . '.json')) {
+            @unlink($this->routePath);
+        }
     }
 
     // ── config files (amendment) ─────────────────────────────────────────────
 
-    /** Absolute path of a scenario's canonical SDK config file. */
-    public function configPathFor(int $scenarioId): string
+    /** Filesystem-safe token for a scenario's public id (e.g. "companydata:read" → "companydata_read"). */
+    public static function sid(string $scenarioId): string
     {
-        return $this->configDir . '/' . $scenarioId . '.json';
+        $tok = preg_replace('/[^a-z0-9]+/i', '_', $scenarioId) ?? '';
+        return trim($tok, '_');
+    }
+
+    /** Absolute path of a scenario's canonical SDK config file. */
+    public function configPathFor(string $scenarioId): string
+    {
+        return $this->configDir . '/' . self::sid($scenarioId) . '.json';
     }
 
     /** Absolute path of a scenario's demo-only meta sidecar. */
-    public function metaPathFor(int $scenarioId): string
+    public function metaPathFor(string $scenarioId): string
     {
-        return $this->configDir . '/' . $scenarioId . '.meta.json';
+        return $this->configDir . '/' . self::sid($scenarioId) . '.meta.json';
     }
 
-    public function hasConfig(int $scenarioId): bool
+    public function hasConfig(string $scenarioId): bool
     {
         return is_file($this->configPathFor($scenarioId));
     }
@@ -102,21 +126,20 @@ final class Runtime
      *
      * @param array<string,mixed> $config the canonical SDK config shape (snake_case keys, sdk.html §2/§12c)
      */
-    public function writeConfig(int $scenarioId, array $config): string
+    public function writeConfig(string $scenarioId, array $config): string
     {
         $this->ensureDirs();
-        $final = $this->configPathFor($scenarioId);
-        $this->atomicWrite($final, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        return '.runtime/config/' . $scenarioId . '.json';
+        $this->atomicWrite($this->configPathFor($scenarioId), json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        return '.runtime/config/' . self::sid($scenarioId) . '.json';
     }
 
     /**
-     * Write a scenario's demo-only meta sidecar (authorize_base, claims, share_code, context) — the run
-     * parameters that are NOT SDK Config fields, so they stay out of the canonical config file.
+     * Write a scenario's demo-only meta sidecar — the run parameters that are NOT SDK Config fields, so
+     * they stay out of the canonical config file.
      *
      * @param array<string,mixed> $meta
      */
-    public function writeConfigMeta(int $scenarioId, array $meta): void
+    public function writeConfigMeta(string $scenarioId, array $meta): void
     {
         $this->ensureDirs();
         $this->atomicWrite($this->metaPathFor($scenarioId), json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
@@ -127,7 +150,7 @@ final class Runtime
      *
      * @return array<string,mixed>
      */
-    public function readConfigMeta(int $scenarioId): array
+    public function readConfigMeta(string $scenarioId): array
     {
         $raw = @file_get_contents($this->metaPathFor($scenarioId));
         if ($raw === false) {
@@ -138,10 +161,25 @@ final class Runtime
     }
 
     /**
+     * The decoded canonical config file for a scenario ({} if none).
+     *
+     * @return array<string,mixed>
+     */
+    public function readConfig(string $scenarioId): array
+    {
+        $raw = @file_get_contents($this->configPathFor($scenarioId));
+        if ($raw === false) {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
      * Materialize a browser-sent PEM to config/keys/<sha1>.pem (0600) and return its ABSOLUTE path —
      * the value recorded in the config file (the SDK reads keys by path via file_get_contents).
-     * Content-addressed: identical PEM reuses the same file, so two scenarios sharing a service key
-     * share the file. Removed only by Clear or the startup wipe (never TTL).
+     * Content-addressed: identical PEM reuses the same file, so two scenarios sharing a key share the
+     * file. Removed only by Clear or the startup wipe (never TTL).
      */
     public function materializeConfigKey(string $pem): string
     {
@@ -199,38 +237,84 @@ final class Runtime
         return is_array($decoded) ? $decoded : null;
     }
 
+    // ── webhook routing record (spec §2 — single active company-data webhook run) ──
+
+    /**
+     * Persist the single active webhook route {webhookId, runId}, superseding any prior one. A new
+     * companydata:webhook run calls this on /start; the old run stops receiving (its file stays readable
+     * until TTL/Clear).
+     */
+    public function writeRoute(string $webhookId, string $runId): void
+    {
+        $this->ensureDirs();
+        $this->atomicWrite($this->routePath, json_encode(['webhookId' => $webhookId, 'runId' => $runId], JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * The active webhook route, or null when none is set.
+     *
+     * @return array{webhookId:string,runId:string}|null
+     */
+    public function readRoute(): ?array
+    {
+        $raw = @file_get_contents($this->routePath);
+        if ($raw === false) {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !isset($decoded['webhookId'], $decoded['runId'])) {
+            return null;
+        }
+        return ['webhookId' => (string) $decoded['webhookId'], 'runId' => (string) $decoded['runId']];
+    }
+
+    public function clearRoute(): void
+    {
+        @unlink($this->routePath);
+    }
+
     // ── clear ────────────────────────────────────────────────────────────────
 
     /**
-     * Per-scenario clear (spec §3): delete that scenario's run files AND its config + meta files, then
-     * garbage-collect any key PEM no surviving config still references (keys are content-addressed and
-     * may be shared, so a key is removed only once nothing points at it).
+     * Per-scenario clear (spec §3): delete that scenario's run files (matched on the run's public scenario
+     * id) AND its config + meta files, then garbage-collect any key PEM no surviving config still
+     * references. Clearing the webhook scenario also drops the routing record + pump cache.
      */
-    public function clearScenario(int $scenarioId): void
+    public function clearScenario(string $scenarioId): void
     {
         foreach (glob($this->runsDir . '/*.json') ?: [] as $path) {
             $decoded = json_decode((string) @file_get_contents($path), true);
-            if (is_array($decoded) && (int) ($decoded['scenario'] ?? 0) === $scenarioId) {
+            if (is_array($decoded) && (string) ($decoded['scenario'] ?? '') === $scenarioId) {
                 @unlink($path);
             }
         }
         @unlink($this->configPathFor($scenarioId));
         @unlink($this->metaPathFor($scenarioId));
+        if (str_starts_with($scenarioId, 'companydata:')) {
+            // Only the company-data family uses the pump cache + webhook route.
+            if ($scenarioId === 'companydata:webhook') {
+                $this->clearRoute();
+            }
+            $this->rmTree($this->cacheDir);
+        }
         $this->gcConfigKeys();
+        $this->ensureDirs();
     }
 
-    /** Global clear: wipe all run files and the entire config tree (configs, metas, keys). */
+    /** Global clear: wipe all run files, the config tree (configs, metas, keys), the route + pump cache. */
     public function clearAll(): void
     {
         foreach (glob($this->runsDir . '/*') ?: [] as $path) {
             @unlink($path);
         }
         $this->rmTree($this->configDir);
+        $this->rmTree($this->cacheDir);
+        $this->clearRoute();
         $this->ensureDirs();
     }
 
     /**
-     * Delete any key PEM in config/keys that no surviving config/{id}.json references by path.
+     * Delete any key PEM in config/keys that no surviving config/{sid}.json references by path.
      * Robust to content-addressed sharing: a key survives as long as ANY config points at it.
      */
     private function gcConfigKeys(): void

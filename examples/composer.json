@@ -1,6 +1,6 @@
 {
-    "name": "allus/identity-example",
-    "description": "Runnable identity example (sign-in / OIDC / 2FA) for the allus company-data PHP SDK. Its own composer sub-project — NOT part of the published SDK package.",
+    "name": "allus/examples",
+    "description": "Runnable examples (identity sign-in/OIDC/2FA · company-data · contract flow) for the allus company-data PHP SDK — ONE server, shared scaffolding, all three scenario families on one port. Its own composer sub-project — NOT part of the published SDK package.",
     "type": "project",
     "license": "MIT",
     "require": {
@@ -15,13 +15,13 @@
     "repositories": [
         {
             "type": "path",
-            "url": "../..",
+            "url": "..",
             "options": { "symlink": true }
         }
     ],
     "autoload": {
         "psr-4": {
-            "Allus\\IdentityExample\\": "src/"
+            "Allus\\Examples\\": "src/"
         }
     },
     "config": {

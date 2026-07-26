@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Allus\IdentityExample;
+namespace Allus\Examples;
 
 /**
  * PKCE (RFC 7636) verifier + S256 challenge. Pure local crypto — no network, no platform HTTP.

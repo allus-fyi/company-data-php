@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Allus\IdentityExample;
+namespace Allus\Examples\Identity;
 
 use Allus\CompanyData\Claim;
 use Allus\CompanyData\Client;
@@ -11,6 +11,10 @@ use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\OAuthClient;
+use Allus\Examples\Family;
+use Allus\Examples\Pkce;
+use Allus\Examples\Response;
+use Allus\Examples\Runtime;
 use Facile\OpenIDClient\Client\ClientBuilder;
 use Facile\OpenIDClient\Client\Metadata\ClientMetadata;
 use Facile\OpenIDClient\Issuer\IssuerBuilder;
@@ -18,22 +22,21 @@ use Facile\OpenIDClient\Service\Builder\AuthorizationServiceBuilder;
 use Facile\OpenIDClient\Session\AuthSession;
 
 /**
- * The demo-backend contract (spec §3, config-file amendment). One class, one worker: HTTP dispatch →
- * handler → intended SDK surface (or the OIDC library for scenarios 5/6). Handlers NEVER perform raw
- * platform HTTP and NEVER block on SDK defaults — detached / challenge waits are short-cycled
- * (timeout=2) inside GET /api/runs.
+ * The IDENTITY scenario handlers (spec §3, config-file amendment): Sign in with allme (redirect / detached
+ * / one-time claims / connect), OIDC login + continue-on-your-phone, and standalone service-2FA. Each
+ * handler runs the intended SDK surface (or the OIDC library for scenarios 5/6). Handlers NEVER perform
+ * raw platform HTTP and NEVER block on SDK defaults — detached / challenge waits are short-cycled
+ * (timeout=2) inside {@see run()}.
  *
- * Settings flow (amendment): the browser POSTs a scenario's setup values to
- * POST /api/scenarios/{id}/config, which writes them to a canonical SDK config FILE
- * (.runtime/config/{id}.json). /start and /enroll then build the SDK from that file via the
- * role-appropriate file constructor (OAuthClient::fromConfig → Config::fromIdwFile;
- * Client::fromConfig → Config::fromFile) and run OFF the config — exactly as a real integrator wires
- * the SDK. The request body of /start is ignored; a /start with no saved config → 409 not_configured.
+ * Settings flow (amendment): the browser POSTs a scenario's setup values to /config, which writes them to
+ * a canonical SDK config FILE (.runtime/config/{id}.json). start()/enroll() then build the SDK from that
+ * file via the role-appropriate file constructor (OAuthClient::fromConfig → Config::fromIdwFile;
+ * Client::fromConfig → Config::fromFile) and run OFF the config — exactly as a real integrator wires the
+ * SDK. The request body of /start is ignored; a /start with no saved config → 409 not_configured.
  */
-final class Server
+final class Handlers implements Family
 {
-    public const CONTRACT_VERSION = 1;
-    public const SDK = 'php';
+    public const FAMILY = 'identity';
 
     /** id => "runnable" | "guide". Scenario 7 is the guide card (no /start). */
     private const SCENARIOS = [
@@ -51,73 +54,25 @@ final class Server
     private const DEFAULT_AUTHORIZE_BASE = OAuthClient::DEFAULT_AUTHORIZE_URL; // https://web.allme.fyi/auth
 
     /**
-     * Network timeout (seconds) for the short-cycled polls in {@see advance()}. The SDK's poll
-     * helpers bound their LOGICAL loop with timeout=2, but that does not bound the underlying HTTP
-     * request — the default transport waits 30s (CurlTransport). A single-worker server must not be
-     * pinned for 30s by one blackholed poll (spec §3), so the poll clients get a 2s transport.
+     * Network timeout (seconds) for the short-cycled polls in {@see advance()}. The SDK's poll helpers
+     * bound their LOGICAL loop with timeout=2, but that does not bound the underlying HTTP request — the
+     * default transport waits 30s (CurlTransport). A single-worker server must not be pinned for 30s by
+     * one blackholed poll (spec §3), so the poll clients get a 2s transport.
      */
     private const POLL_TRANSPORT_TIMEOUT_S = 2.0;
 
-    public function __construct(
-        private readonly Runtime $rt,
-        private readonly string $frontendDir,
-        private readonly string $sdkVersion,
-    ) {
+    public function __construct(private readonly Runtime $rt)
+    {
     }
 
-    // ── entry point ────────────────────────────────────────────────────────
-
-    public function handle(): void
+    /** @return list<array{id:int,kind:string}> */
+    public function scenarios(): array
     {
-        $this->rt->ensureDirs();
-        $this->rt->sweep(); // lazy TTL sweep on every request (spec §3)
-
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $path = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
-
-        try {
-            if ($path === '/api/meta' && $method === 'GET') {
-                $this->meta();
-            } elseif ($path === '/callback' && $method === 'GET') {
-                $this->callback();
-            } elseif ($path === '/api/clear' && $method === 'POST') {
-                $this->rt->clearAll();
-                $this->json(['ok' => true]);
-            } elseif (preg_match('#^/api/scenarios/(\d+)/config$#', $path, $m) && $method === 'POST') {
-                $this->config((int) $m[1]);
-            } elseif (preg_match('#^/api/scenarios/(\d+)/start$#', $path, $m) && $method === 'POST') {
-                $this->start((int) $m[1]);
-            } elseif (preg_match('#^/api/scenarios/(\d+)/enroll$#', $path, $m) && $method === 'POST') {
-                $this->enroll((int) $m[1]);
-            } elseif (preg_match('#^/api/scenarios/(\d+)/clear$#', $path, $m) && $method === 'POST') {
-                $this->rt->clearScenario((int) $m[1]);
-                $this->json(['ok' => true]);
-            } elseif (preg_match('#^/api/runs/([0-9a-f]{32})$#', $path, $m) && $method === 'GET') {
-                $this->run($m[1]);
-            } elseif (str_starts_with($path, '/api/')) {
-                $this->json(['error' => 'not_found'], 404);
-            } else {
-                $this->serveStatic($path);
-            }
-        } catch (\Throwable $e) {
-            $this->json(['error' => 'server_error', 'message' => $e->getMessage()], 500);
-        }
-    }
-
-    // ── GET /api/meta ────────────────────────────────────────────────────────
-
-    private function meta(): void
-    {
-        $scenarios = [];
+        $out = [];
         foreach (self::SCENARIOS as $id => $kind) {
-            $scenarios[] = ['id' => $id, 'kind' => $kind];
+            $out[] = ['id' => $id, 'kind' => $kind];
         }
-        $this->json([
-            'sdk' => self::SDK,
-            'sdkVersion' => $this->sdkVersion,
-            'contractVersion' => self::CONTRACT_VERSION,
-            'scenarios' => $scenarios,
-        ]);
+        return $out;
     }
 
     // ── POST /api/scenarios/{id}/config (amendment) ────────────────────────────
@@ -126,14 +81,15 @@ final class Server
      * Write the browser's setup values to a canonical SDK config FILE (spec §3). Any PEM is written to
      * .runtime/config/keys/ and referenced by path; demo-only run parameters (authorize base, one_time
      * claims, share code, context) go to a meta sidecar so the config file stays a pure SDK config.
+     *
+     * @param array<string,mixed> $in
      */
-    private function config(int $id): void
+    public function config(string $sid, array $in): Response
     {
+        $id = (int) $sid;
         if (!isset(self::SCENARIOS[$id]) || self::SCENARIOS[$id] !== 'runnable') {
-            $this->json(['error' => 'not_found'], 404);
-            return;
+            return Response::json(['error' => 'not_found'], 404);
         }
-        $in = $this->body();
 
         // Canonical SDK config — the idw role for every OAuth scenario (sdk.html §12c).
         $cfg = [
@@ -170,7 +126,7 @@ final class Server
             $cfg['key_passphrase'] = (string) ($in['keyPassphrase'] ?? '');
         }
 
-        $configPath = $this->rt->writeConfig($id, $cfg);
+        $configPath = $this->rt->writeConfig($sid, $cfg);
 
         // Demo-only run parameters (NOT SDK Config fields) → meta sidecar.
         $meta = [];
@@ -186,26 +142,25 @@ final class Server
                 $meta['context'] = (string) $in['context'];
             }
         }
-        $this->rt->writeConfigMeta($id, $meta);
+        $this->rt->writeConfigMeta($sid, $meta);
 
-        $this->json(['ok' => true, 'configPath' => $configPath]);
+        return Response::json(['ok' => true, 'configPath' => $configPath]);
     }
 
     // ── POST /api/scenarios/{id}/start ─────────────────────────────────────────
 
-    private function start(int $id): void
+    public function start(string $sid): Response
     {
+        $id = (int) $sid;
         if (!isset(self::SCENARIOS[$id]) || self::SCENARIOS[$id] !== 'runnable') {
-            $this->json(['error' => 'not_found'], 404);
-            return;
+            return Response::json(['error' => 'not_found'], 404);
         }
-        if (!$this->rt->hasConfig($id)) {
+        if (!$this->rt->hasConfig($sid)) {
             // The run is built from the persisted config file, not the request body (amendment).
-            $this->json(['error' => 'not_configured'], 409);
-            return;
+            return Response::json(['error' => 'not_configured'], 409);
         }
         $runId = $this->rt->newRunId();
-        $run = ['scenario' => $id, 'status' => 'pending', 'state' => $runId, 'calls' => []];
+        $run = ['family' => self::FAMILY, 'scenario' => $id, 'status' => 'pending', 'state' => $runId, 'calls' => []];
 
         switch ($id) {
             case 1: // Sign in — redirect
@@ -215,15 +170,14 @@ final class Server
                 $run['verifier'] = $pkce['verifier'];
                 $mode = $id === 1 ? 'signin' : ($id === 3 ? 'one_time' : 'connect');
                 $claims = $id === 3
-                    ? $this->claimObjects($this->rt->readConfigMeta($id)['claims'] ?? [])
+                    ? $this->claimObjects($this->rt->readConfigMeta($sid)['claims'] ?? [])
                     : [];
                 $oauth = $this->oauthClientFor($id);
                 // redirectUri = null → the OAuthClient uses its config's oauth_redirect_uri.
                 $url = $oauth->authorizeUrl($mode, $claims, $runId, 'redirect', $pkce['challenge']);
                 $run['calls'] = ['OAuthClient::authorizeUrl'];
                 $this->rt->writeRun($runId, $run);
-                $this->json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
-                return;
+                return Response::json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
 
             case 2: // Sign in — detached
                 $pkce = Pkce::generate();
@@ -233,8 +187,7 @@ final class Server
                 $url = $oauth->authorizeUrl('signin', [], $runId, 'detached', $pkce['challenge']);
                 $run['calls'] = ['OAuthClient::authorizeUrl'];
                 $this->rt->writeRun($runId, $run);
-                $this->json(['runId' => $runId, 'action' => ['type' => 'detached', 'url' => $url]]);
-                return;
+                return Response::json(['runId' => $runId, 'action' => ['type' => 'detached', 'url' => $url]]);
 
             case 5: // OIDC login
             case 6: // OIDC — continue on your phone (#431)
@@ -253,11 +206,10 @@ final class Server
                 ]);
                 $run['calls'] = ['(oidc) IssuerBuilder::build', '(oidc) AuthorizationService::getAuthorizationUri'];
                 $this->rt->writeRun($runId, $run);
-                $this->json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
-                return;
+                return Response::json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
 
             case 8: // Standalone service-2FA — the challenge step
-                $meta = $this->rt->readConfigMeta($id);
+                $meta = $this->rt->readConfigMeta($sid);
                 $shareCode = (string) ($meta['share_code'] ?? '');
                 $context = isset($meta['context']) && $meta['context'] !== '' ? (string) $meta['context'] : null;
                 $idempotencyKey = substr('demo-' . $runId, 0, 64); // backend-generated, per-run (SDK requires it)
@@ -268,27 +220,27 @@ final class Server
                 $run['challengeId'] = $challenge->challengeId;
                 $run['calls'] = ['Client::twoFactor', 'TwoFactorClient::challenge'];
                 $this->rt->writeRun($runId, $run);
-                $this->json([
+                return Response::json([
                     'runId' => $runId,
                     'action' => ['type' => 'challenge', 'matchingDigits' => $challenge->matchingDigits],
                 ]);
-                return;
         }
+
+        return Response::json(['error' => 'not_found'], 404);
     }
 
     // ── POST /api/scenarios/{id}/enroll (scenario 8) ───────────────────────────
 
-    private function enroll(int $id): void
+    /** @param array<string,mixed> $in */
+    public function enroll(string $sid, array $in): Response
     {
+        $id = (int) $sid;
         if ($id !== 8) {
-            $this->json(['error' => 'not_found'], 404);
-            return;
+            return Response::json(['error' => 'not_found'], 404);
         }
-        if (!$this->rt->hasConfig($id)) {
-            $this->json(['error' => 'not_configured'], 409);
-            return;
+        if (!$this->rt->hasConfig($sid)) {
+            return Response::json(['error' => 'not_configured'], 409);
         }
-        $in = $this->body();
         $responseMode = ($in['responseMode'] ?? 'redirect') === 'detached' ? 'detached' : 'redirect';
         $runId = $this->rt->newRunId();
 
@@ -296,6 +248,7 @@ final class Server
         $url = $oauth->authorizeUrl('2fa_enroll', [], $runId, $responseMode);
 
         $run = [
+            'family' => self::FAMILY,
             'scenario' => 8,
             'isEnroll' => true,
             'status' => 'pending',
@@ -308,19 +261,18 @@ final class Server
         $action = $responseMode === 'detached'
             ? ['type' => 'detached', 'url' => $url]
             : ['type' => 'redirect', 'url' => $url];
-        $this->json(['runId' => $runId, 'action' => $action]);
+        return Response::json(['runId' => $runId, 'action' => $action]);
     }
 
     // ── GET /callback ──────────────────────────────────────────────────────────
 
-    private function callback(): void
+    /** @param array<string,mixed> $q */
+    public function callback(array $q): Response
     {
-        $q = $_GET;
         $state = (string) ($q['state'] ?? '');
         $run = $this->rt->readRun($state);
         if ($run === null) {
-            header('Location: /?error=unknown_run', true, 302);
-            return;
+            return Response::redirect('/?error=unknown_run');
         }
         $id = (int) ($run['scenario'] ?? 0);
 
@@ -347,19 +299,16 @@ final class Server
         }
 
         $this->rt->writeRun($state, $run);
-        header('Location: /?scenario=' . $id . '&run=' . rawurlencode($state), true, 302);
+        return Response::redirect('/?scenario=' . $id . '&run=' . rawurlencode($state));
     }
 
     // ── GET /api/runs/{runId} ──────────────────────────────────────────────────
 
-    private function run(string $runId): void
+    /**
+     * @param array<string,mixed> $run
+     */
+    public function run(string $runId, array $run): Response
     {
-        $run = $this->rt->readRun($runId);
-        if ($run === null) {
-            $this->json(['error' => 'not_found'], 404);
-            return;
-        }
-
         // Idempotent: a terminal outcome is returned on every poll until TTL/Clear.
         if (($run['status'] ?? 'pending') === 'pending') {
             $run = $this->advance($run);
@@ -373,7 +322,7 @@ final class Server
         if (isset($run['error'])) {
             $out['error'] = $run['error'];
         }
-        $this->json($out);
+        return Response::json($out);
     }
 
     /**
@@ -414,12 +363,11 @@ final class Server
             }
             // else (redirect / continue-on-phone flows): completion arrives via /callback — stay pending.
         } catch (ApiError $e) {
-            // The SDK poll helpers signal a LOGICAL "not completed within {n}s" timeout as
-            // ApiError(0) with that exact sentinel message (OAuthClient::pollResult /
-            // TwoFactorClient::waitForResult). A real transport failure ALSO surfaces as ApiError(0)
+            // The SDK poll helpers signal a LOGICAL "not completed within {n}s" timeout as ApiError(0)
+            // with that exact sentinel message. A real transport failure ALSO surfaces as ApiError(0)
             // (CurlTransport), so the status alone cannot tell them apart — match the SDK's sentinel.
-            // Only the logical timeout is "still pending"; a real network/transport failure is a
-            // failed run (spec §3), not an eternal pending.
+            // Only the logical timeout is "still pending"; a real network/transport failure is a failed
+            // run (spec §3), not an eternal pending.
             if ($e->status === 0 && str_contains($e->getMessage(), 'not completed within')) {
                 return $run; // logical short-cycle timeout → still pending
             }
@@ -509,15 +457,15 @@ final class Server
      * a non-default authorize base (local-stack option) still loads Config from the file via
      * Config::fromIdwFile, only supplying the alternate base the wrapper cannot set.
      *
-     * $transportTimeout bounds the HTTP network wait — passed for the short-cycled polls so one
-     * blackholed request cannot pin the single worker for the transport's 30s default (spec §3);
-     * null keeps the SDK's own default transport for the completion paths.
+     * $transportTimeout bounds the HTTP network wait — passed for the short-cycled polls so one blackholed
+     * request cannot pin the single worker for the transport's 30s default (spec §3); null keeps the SDK's
+     * own default transport for the completion paths.
      */
     private function oauthClientFor(int $id, ?float $transportTimeout = null): OAuthClient
     {
-        $path = $this->rt->configPathFor($id);
+        $path = $this->rt->configPathFor((string) $id);
         $transport = $transportTimeout !== null ? new CurlTransport($transportTimeout) : null;
-        $base = (string) ($this->rt->readConfigMeta($id)['authorize_base'] ?? '');
+        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
         if ($base === '' || $base === OAuthClient::DEFAULT_AUTHORIZE_URL) {
             return OAuthClient::fromConfig($path, $transport); // null → the SDK's default CurlTransport
         }
@@ -530,7 +478,7 @@ final class Server
      */
     private function serviceClientFor(int $id, ?float $transportTimeout = null): Client
     {
-        $path = $this->rt->configPathFor($id);
+        $path = $this->rt->configPathFor((string) $id);
         if ($transportTimeout === null) {
             return Client::fromConfig($path);
         }
@@ -545,7 +493,7 @@ final class Server
      */
     private function oidcClientFor(int $id): array
     {
-        $cfg = $this->loadConfig($id);
+        $cfg = $this->rt->readConfig((string) $id);
         // Non-default issuer tolerance: discovery is driven off the configured api base.
         $issuer = (new IssuerBuilder())->build((string) ($cfg['api_url'] ?? ''));
         $metadata = ClientMetadata::fromArray([
@@ -560,25 +508,10 @@ final class Server
         return [$client, $authService];
     }
 
-    /**
-     * The decoded canonical config file for a scenario ({} if none).
-     *
-     * @return array<string,mixed>
-     */
-    private function loadConfig(int $id): array
-    {
-        $raw = @file_get_contents($this->rt->configPathFor($id));
-        if ($raw === false) {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        return is_array($decoded) ? $decoded : [];
-    }
-
     /** The redirect URI recorded in the scenario's config file (used by the OIDC library). */
     private function configRedirectUri(int $id): string
     {
-        return (string) ($this->loadConfig($id)['oauth_redirect_uri'] ?? $this->redirectUri());
+        return (string) ($this->rt->readConfig((string) $id)['oauth_redirect_uri'] ?? $this->redirectUri());
     }
 
     // ── input / config plumbing ────────────────────────────────────────────────
@@ -610,70 +543,5 @@ final class Server
     private function claimObjects(array $types): array
     {
         return array_map(static fn (string $t): Claim => new Claim($t), $types);
-    }
-
-    // ── HTTP plumbing ──────────────────────────────────────────────────────────
-
-    /** @return array<string,mixed> */
-    private function body(): array
-    {
-        $raw = file_get_contents('php://input');
-        if ($raw === false || $raw === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        return is_array($decoded) ? $decoded : [];
-    }
-
-    /** @param array<string,mixed> $data */
-    private function json(array $data, int $status = 200): void
-    {
-        http_response_code($status);
-        header('Content-Type: application/json');
-        echo json_encode($data, JSON_UNESCAPED_SLASHES);
-    }
-
-    private function serveStatic(string $path): void
-    {
-        $rel = $path === '/' ? '/index.html' : $path;
-        $full = realpath($this->frontendDir . $rel);
-        $root = realpath($this->frontendDir);
-
-        // Path-traversal guard + SPA fallback to index.html.
-        if ($full === false || $root === false || !str_starts_with($full, $root) || !is_file($full)) {
-            $index = $this->frontendDir . '/index.html';
-            if (is_file($index)) {
-                header('Content-Type: text/html; charset=utf-8');
-                readfile($index);
-                return;
-            }
-            http_response_code(404);
-            header('Content-Type: text/plain');
-            echo "bundle not found";
-            return;
-        }
-
-        header('Content-Type: ' . self::mime($full));
-        readfile($full);
-    }
-
-    private static function mime(string $path): string
-    {
-        return match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
-            'html' => 'text/html; charset=utf-8',
-            'js', 'mjs' => 'text/javascript; charset=utf-8',
-            'css' => 'text/css; charset=utf-8',
-            'json', 'map' => 'application/json; charset=utf-8',
-            'svg' => 'image/svg+xml',
-            'png' => 'image/png',
-            'jpg', 'jpeg' => 'image/jpeg',
-            'gif' => 'image/gif',
-            'ico' => 'image/x-icon',
-            'woff' => 'font/woff',
-            'woff2' => 'font/woff2',
-            'ttf' => 'font/ttf',
-            'webp' => 'image/webp',
-            default => 'application/octet-stream',
-        };
     }
 }

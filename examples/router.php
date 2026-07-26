@@ -3,15 +3,15 @@
 declare(strict_types=1);
 
 /**
- * Router for `php -S localhost:${PORT:-8091} router.php` (spec §3).
+ * Router for `php -S localhost:${PORT:-8091} router.php` (#494 — one server for all three families).
  *
  * SINGLE WORKER — PHP_CLI_SERVER_WORKERS is deliberately NOT set, so requests serialize and there is no
- * cross-request concurrency to guard. Every request (static bundle OR API OR the public POST /webhook) is
- * dispatched by {@see Server}.
+ * cross-request concurrency to guard. Every request (static bundle OR API OR the public POST /webhook OR
+ * GET /callback) is dispatched by the shared {@see Server}.
  */
 
-use Allus\CompanyDataExample\Runtime;
-use Allus\CompanyDataExample\Server;
+use Allus\Examples\Runtime;
+use Allus\Examples\Server;
 
 $base = __DIR__;
 
@@ -24,9 +24,9 @@ if (!is_file($autoload)) {
 }
 require $autoload;
 
-// The SDK's own version (read from the linked package's composer.json — path repo → ../..).
+// The SDK's own version (read from the linked package's composer.json — path repo → .. — the SDK root).
 $sdkVersion = 'unknown';
-$sdkComposer = $base . '/../../composer.json';
+$sdkComposer = $base . '/../composer.json';
 if (is_file($sdkComposer)) {
     $meta = json_decode((string) file_get_contents($sdkComposer), true);
     if (is_array($meta) && isset($meta['version'])) {
