@@ -122,7 +122,7 @@ Inbound delivery to your `localhost` requires a public URL, which is **optional*
 ## Bumping the frontend pin
 
 The frontend ships as a checksummed release asset; the pin lives in `frontend.lock`
-(`{"tag":"v0.4.0","sha256":"<sha256 of dist.tar.gz>"}`) and covers the whole
+(`{"tag":"v0.5.0","sha256":"<sha256 of dist.tar.gz>"}`) and covers the whole
 examples tree. To move to a newer release: note the release **tag** and its
 `dist.tar.gz` checksum (`shasum -a 256 dist.tar.gz`) from
 `github.com/allme-sdk/example-test-suite`, set `tag` + `sha256` in `frontend.lock`,
