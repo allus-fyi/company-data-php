@@ -27,7 +27,8 @@
     "config": {
         "allow-plugins": {
             "php-http/discovery": true
-        }
+        },
+        "process-timeout": 0
     },
     "archive": {
         "exclude": ["/vendor", "/.runtime", "/.frontend", "/.DS_Store"]
