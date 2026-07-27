@@ -1,6 +1,7 @@
-# #478: the identity example is a dev-only sub-project — keep it out of the published
-# allus/company-data package. Composer builds dist tarballs via `git archive`, which honours
-# export-ignore; the dir entry drops the subtree and the /** glob covers every nested path.
-# (The example's own transients — vendor/, .runtime/, .frontend/ — are git-ignored separately.)
-/examples export-ignore
-/examples/** export-ignore
+# #493: the examples SHIP INSIDE the published allus/company-data package. Composer builds its
+# dist tarball via `git archive`, which honours export-ignore — so the /examples entries that
+# #478 added here were exactly what kept them out, and they are deliberately gone.
+#
+# The example is still its own composer sub-project and is NOT separately published; only its
+# SOURCE rides along inside the SDK package. Its transients (vendor/, .runtime/, .frontend/)
+# stay out via examples/.gitignore, which git archive also honours.

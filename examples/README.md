@@ -175,7 +175,7 @@ the link-click path for that scenario locally.
 
 | Path | What it is |
 |---|---|
-| `composer.json` | The one composer sub-project — the SDK via path repo + the OIDC library. **Excluded from the published SDK package** (`archive.exclude`). |
+| `composer.json` | The one composer sub-project — the SDK via path repo + the OIDC library. Not separately published, but its source ships **inside** the SDK's Composer package (#493). |
 | `bin/start.php` | The one-command launcher (steps above). |
 | `router.php` | `php -S` router — serves the static bundle + the whole contract API + the public `POST /webhook` (company-data) + `GET /callback` (identity). |
 | `src/Server.php` | The **shared scaffolding**: HTTP dispatch, the aggregate `/api/meta`, static-bundle serving, and routing each scenario to its family by id. Contains no SDK calls. |

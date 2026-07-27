@@ -1,6 +1,6 @@
 {
     "name": "allus/examples",
-    "description": "Runnable examples (identity sign-in/OIDC/2FA · company-data · contract flow) for the allus company-data PHP SDK — ONE server, shared scaffolding, all three scenario families on one port. Its own composer sub-project — NOT part of the published SDK package.",
+    "description": "Runnable examples (identity sign-in/OIDC/2FA · company-data · contract flow) for the allus company-data PHP SDK — ONE server, shared scaffolding, all three scenario families on one port. Its own composer sub-project — not separately published, but its source ships inside the SDK package (#493).",
     "type": "project",
     "license": "MIT",
     "require": {
