@@ -537,11 +537,15 @@ final class Handlers implements Family
     }
 
     /**
+     * #498: a claim carries a mandatory, unique `name` — the key `values` and `attestations` come
+     * back under. The demo's config lists claim TYPES, so the type doubles as the name here; a real
+     * integration usually names them for its own domain ("billing_email").
+     *
      * @param list<string> $types
      * @return list<Claim>
      */
     private function claimObjects(array $types): array
     {
-        return array_map(static fn (string $t): Claim => new Claim($t), $types);
+        return array_map(static fn (string $t): Claim => new Claim($t, $t), $types);
     }
 }

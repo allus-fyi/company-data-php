@@ -70,23 +70,50 @@ final class OAuthTest extends TestCase
     public function testAuthorizeUrlClaimValidation(): void
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
+        // #498: every claim carries a mandatory `name` — the identity everything downstream is keyed by.
         $claims = [
-            new Claim('email', suggest: 'email_personal'),
-            new Claim('photo'),
-            new Claim('phone', required: true),
-            new Claim(''),
+            new Claim('email', 'email', suggest: 'email_personal'),
+            new Claim('avatar', 'photo'),
+            new Claim('phone', 'phone', required: true),
+            new Claim('nothing', ''),
         ];
         [, $q] = $this->parseUrl($c->authorizeUrl('one_time', claims: $claims));
         $parsed = json_decode($q['claims'], true);
         $this->assertSame(['email', 'phone'], array_column($parsed, 'type'));
+        $this->assertSame(['email', 'phone'], array_column($parsed, 'name'));
         $this->assertSame('email_personal', $parsed[0]['suggest']);
         $this->assertTrue($parsed[1]['required']);
+    }
+
+    /** #498 §2: a nameless claim, and two sharing a name, are refused at the call that made them. */
+    public function testAuthorizeUrlClaimNameRequired(): void
+    {
+        $c = new OAuthClient($this->idwCfg(), new FakeTransport());
+        $this->expectException(ConfigError::class);
+        $c->authorizeUrl('one_time', claims: [new Claim('', 'email')]);
+    }
+
+    public function testAuthorizeUrlDuplicateClaimName(): void
+    {
+        $c = new OAuthClient($this->idwCfg(), new FakeTransport());
+        $this->expectException(ConfigError::class);
+        $c->authorizeUrl('one_time', claims: [new Claim('email', 'email'), new Claim('email', 'text')]);
+    }
+
+    /** #498 §3: `verified` travels on the wire, so an RP can demand a #311-attested answer. */
+    public function testAuthorizeUrlClaimVerified(): void
+    {
+        $c = new OAuthClient($this->idwCfg(), new FakeTransport());
+        [, $q] = $this->parseUrl($c->authorizeUrl('signin', claims: [new Claim('email', 'email', verified: true)]));
+        $parsed = json_decode($q['claims'], true);
+        $this->assertCount(1, $parsed);
+        $this->assertTrue($parsed[0]['verified']);
     }
 
     public function testAuthorizeUrlCaps15(): void
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
-        $claims = array_fill(0, 30, new Claim('text'));
+        $claims = array_map(static fn (int $i) => new Claim("c{$i}", 'text'), range(0, 29));
         [, $q] = $this->parseUrl($c->authorizeUrl('one_time', claims: $claims));
         $this->assertCount(15, json_decode($q['claims'], true));
     }
@@ -103,7 +130,7 @@ final class OAuthTest extends TestCase
         $t = new FakeTransport();
         $t->postResponses[] = FakeTransport::json(200, ['access_token' => 'AT', 'mode' => 'signin']);
         $t->getResponses[] = FakeTransport::json(200, [
-            'sub' => 'u1', 'share_code' => 'AB12CD', 'display_name' => 'Alice', 'mode' => 'signin', 'two_factor' => false,
+            'sub' => 'AB12CD', 'share_code' => 'AB12CD', 'mode' => 'signin', 'two_factor' => false,
         ]);
         $c = new OAuthClient($this->idwCfg(), $t);
         $tok = $c->exchangeCode('CODE', 'V');
@@ -111,7 +138,10 @@ final class OAuthTest extends TestCase
         $this->assertSame('authorization_code', $t->posts[0]['form']['grant_type']);
         $this->assertSame('V', $t->posts[0]['form']['code_verifier']);
         $info = $c->userinfo('AT');
-        $this->assertSame('Alice', $info['display_name']);
+        // #498 §5: `sub` IS the share code (byte-identical to the id_token's); display_name is gone.
+        $this->assertSame('AB12CD', $info['sub']);
+        $this->assertSame($info['share_code'], $info['sub']);
+        $this->assertArrayNotHasKey('display_name', $info);
     }
 
     public function testCompleteSignInDecrypts(): void
@@ -122,15 +152,17 @@ final class OAuthTest extends TestCase
         $t = new FakeTransport();
         $t->postResponses[] = FakeTransport::json(200, ['access_token' => 'AT', 'mode' => 'one_time']);
         $t->getResponses[] = FakeTransport::json(200, [
-            'sub' => 'u1', 'display_name' => 'Alice', 'mode' => 'one_time', 'two_factor' => true,
+            'sub' => 'AB12CD', 'share_code' => 'AB12CD', 'mode' => 'one_time', 'two_factor' => true,
             'values' => ['email_personal' => $vec['text']['wrapper']],
         ]);
         $c = new OAuthClient($this->idwCfg($pem, $vec['passphrase']), $t);
         $res = $c->completeSignIn('CODE', 'V');
         $this->assertSame('one_time', $res['mode']);
         $this->assertTrue($res['two_factor']);
-        $this->assertSame('Alice', $res['user']['display_name']);
+        $this->assertSame('AB12CD', $res['user']['sub']);
         $this->assertSame($vec['text']['plaintext'], $res['values']['email_personal']);
+        // #498 §3.1a: no `values_attestation` on the wire → "not attested", never "wrong".
+        $this->assertSame([], $res['attestations']);
     }
 
     public function testPollResultPendingThenCode(): void

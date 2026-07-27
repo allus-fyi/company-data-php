@@ -108,16 +108,30 @@ final class OAuthClient
     private function cleanClaims(array $claims): array
     {
         $out = [];
+        $seen = [];
         foreach ($claims as $c) {
             if ($c->type === '' || in_array($c->type, self::NON_CLAIMABLE, true)) {
                 continue;
             }
-            $entry = ['type' => $c->type];
+            // #498 §2: `name` is the claim's identity and it is mandatory. Refused HERE rather than
+            // left to the API, so the integration error surfaces at the call that made it.
+            $name = trim($c->name);
+            if ($name === '') {
+                throw new ConfigError('every claim must carry a `name` (#498)');
+            }
+            if (isset($seen[$name])) {
+                throw new ConfigError("duplicate claim name '{$name}' (#498)");
+            }
+            $seen[$name] = true;
+            $entry = ['name' => $name, 'type' => $c->type];
             if ($c->suggest !== null && $c->suggest !== '') {
                 $entry['suggest'] = $c->suggest;
             }
             if ($c->required) {
                 $entry['required'] = true;
+            }
+            if ($c->verified) {
+                $entry['verified'] = true;
             }
             if ($c->label !== null && $c->label !== '') {
                 $entry['label'] = $c->label;
@@ -173,7 +187,21 @@ final class OAuthClient
     /**
      * Exchange + userinfo in one call, decrypting one_time values via the configured app key.
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>}
+     * #498 §5: `user['sub']` IS the person's SHARE CODE and is byte-identical to the id_token's
+     * `sub`; `share_code` is retained beside it for compatibility and now simply equals it.
+     * `display_name` is GONE — it is a consented `name` claim now, or nothing: ask for
+     * `new Claim(name: 'name', type: 'text')` and read `$result['values']['name']`.
+     *
+     * #498 §3.1a: `attestations` is an ADDITIVE sibling map, keyed by the SAME claim name as
+     * `values`, present only for a `verified` claim under ENCRYPTED delivery. An integration that
+     * never reads it behaves exactly as before. Each entry is
+     * `{verified: bool, hash: string, salt: string, verifiedAt: string}` — `verified` is recomputed
+     * BY THIS SDK in constant time over the plaintext it just decrypted, never passed through from
+     * the server. **A `verified === false` entry means MISMATCH and you MUST reject the value.** A
+     * claim ABSENT from `attestations` means "not attested" — never "wrong" — and must be treated as
+     * unverified. `verifiedAt` attests the value as verified AT THAT MOMENT, not verified today.
+     *
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
      */
     public function completeSignIn(string $code, ?string $codeVerifier = null): array
     {
@@ -184,21 +212,82 @@ final class OAuthClient
         }
         $info = $this->userinfo($accessToken);
         $values = [];
+        $attestations = [];
         $raw = $info['values'] ?? null;
         if (is_array($raw) && $raw !== []) {
             $values = $this->decryptValues($raw);
+            $rawAttest = $info['values_attestation'] ?? null;
+            if (is_array($rawAttest) && $rawAttest !== []) {
+                $attestations = $this->decryptAttestations($rawAttest, $values);
+            }
         }
 
         return [
             'user' => [
                 'sub' => self::str($info, 'sub'),
                 'share_code' => self::str($info, 'share_code'),
-                'display_name' => self::str($info, 'display_name'),
             ],
             'mode' => self::str($info, 'mode') ?? self::str($token, 'mode'),
             'two_factor' => (bool) ($info['two_factor'] ?? false),
             'values' => $values,
+            'attestations' => $attestations,
         ];
+    }
+
+    /**
+     * #498 §3.1a — open the app-key-sealed attestations and attest each value ourselves.
+     *
+     * A SECOND decrypt per verified claim: `values` is byte-identical to before, but each attestation
+     * is its own `{"_enc":1,...}` object. A passthrough accessor handing back an undecrypted blob
+     * would not be an implementation of this.
+     *
+     * An attestation that cannot be opened or parsed is DROPPED, not surfaced as `verified: false` —
+     * absence means "not attested" and a mismatch means "reject the value", and conflating the two
+     * would turn a key or transport problem into an accusation that the data was tampered with.
+     *
+     * @param array<string,mixed> $raw
+     * @param array<string,string> $values
+     * @return array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>
+     */
+    private function decryptAttestations(array $raw, array $values): array
+    {
+        // decryptValues() ran first and already refused an unconfigured key, so reaching here with
+        // one is impossible; re-reading rather than threading the key keeps the two paths independent.
+        $pem = @file_get_contents((string) $this->config->oauthPrivateKey);
+        if ($pem === false) {
+            return [];
+        }
+        $key = Crypto::loadPrivateKey($pem, (string) $this->config->oauthKeyPassphrase);
+        $out = [];
+        foreach ($raw as $slug => $wrapper) {
+            $slug = (string) $slug;
+            if (!isset($values[$slug]) || (!is_array($wrapper) && !is_string($wrapper))) {
+                continue;
+            }
+            try {
+                $decoded = json_decode(Crypto::decrypt($wrapper, $key), true);
+            } catch (\Throwable) {
+                continue;
+            }
+            if (!is_array($decoded)) {
+                continue;
+            }
+            $hash = (string) ($decoded['hash'] ?? '');
+            $salt = (string) ($decoded['salt'] ?? '');
+            if ($hash === '' || $salt === '') {
+                continue;
+            }
+            $out[$slug] = [
+                // Recomputed here, constant-time, over the plaintext just decrypted — never trusted
+                // from the server. false = the delivered value is NOT the verified one; reject it.
+                'verified' => Crypto::hashMatches($salt, $hash, $values[$slug]),
+                'hash' => $hash,
+                'salt' => $salt,
+                'verifiedAt' => (string) ($decoded['verified_at'] ?? ''),
+            ];
+        }
+
+        return $out;
     }
 
     /**
