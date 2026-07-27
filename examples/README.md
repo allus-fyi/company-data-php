@@ -22,6 +22,17 @@ raw platform HTTP; the OIDC scenarios use the standard third-party
 
 ## Run it — one command
 
+The shortest path is the package manager: this suite ships **inside** the published
+`allus/company-data` package, so installing the SDK also gets you the example.
+
+```bash
+composer require allus/company-data
+cd vendor/allus/company-data/examples
+composer start
+```
+
+Or from a clone of the SDK repository:
+
 ```bash
 git clone https://github.com/allus-fyi/company-data-php
 cd company-data-php/examples
