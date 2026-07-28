@@ -54,6 +54,15 @@ final class Handlers implements Family
     private const DEFAULT_AUTHORIZE_BASE = OAuthClient::DEFAULT_AUTHORIZE_URL; // https://web.allme.fyi/auth
 
     /**
+     * Refusal when the request carries no Host header, so the browser's origin is unknown (#574). There is
+     * NO default host: substituting one (localhost) silently sends the round-trip to a DIFFERENT origin
+     * than the browser is on — a different localStorage and a redirect URI the OAuth app never registered.
+     */
+    private const NO_ORIGIN = 'no_origin — this request carried no Host header, so the OAuth redirect URI '
+        . 'cannot be derived from the origin your browser is using. Open the example by its address '
+        . '(http://<host>:<port>/) and save the setup again.';
+
+    /**
      * Network timeout (seconds) for the short-cycled polls in {@see advance()}. The SDK's poll helpers
      * bound their LOGICAL loop with timeout=2, but that does not bound the underlying HTTP request — the
      * default transport waits 30s (CurlTransport). A single-worker server must not be pinned for 30s by
@@ -89,6 +98,11 @@ final class Handlers implements Family
         $id = (int) $sid;
         if (!isset(self::SCENARIOS[$id]) || self::SCENARIOS[$id] !== 'runnable') {
             return Response::json(['error' => 'not_found'], 404);
+        }
+        // The redirect URI is derived from THIS request's origin and from nothing else (#574). Refuse
+        // rather than invent a host: the suite renders this sentence on Save.
+        if (self::requestHost() === '') {
+            return Response::json(['error' => self::NO_ORIGIN], 400);
         }
 
         // Canonical SDK config — the idw role for every OAuth scenario (sdk.html §12c).
@@ -508,18 +522,37 @@ final class Handlers implements Family
         return [$client, $authService];
     }
 
-    /** The redirect URI recorded in the scenario's config file (used by the OIDC library). */
+    /**
+     * The redirect URI recorded in the scenario's config file (used by the OIDC library) — the SAME value
+     * the authorize URL carried, so the two legs of the exchange cannot diverge. An absent/empty record
+     * re-derives from THIS request's origin; it never substitutes a host (#574).
+     */
     private function configRedirectUri(int $id): string
     {
-        return (string) ($this->rt->readConfig((string) $id)['oauth_redirect_uri'] ?? $this->redirectUri());
+        $stored = (string) ($this->rt->readConfig((string) $id)['oauth_redirect_uri'] ?? '');
+        return $stored !== '' ? $stored : $this->redirectUri();
     }
 
     // ── input / config plumbing ────────────────────────────────────────────────
 
-    /** The registered redirect URI: http://{host}/callback (host = the serving origin). */
+    /** The origin THIS request arrived on — the only source the redirect URI is ever derived from. */
+    private static function requestHost(): string
+    {
+        return trim((string) ($_SERVER['HTTP_HOST'] ?? ''));
+    }
+
+    /**
+     * The registered redirect URI: http://{host}/callback, host = the origin the browser actually used.
+     * Never falls back to a hardcoded host (#574) — `127.0.0.1` and `localhost` are DIFFERENT origins for
+     * redirect matching and for browser storage alike, so a substituted default drops the developer on an
+     * origin whose localStorage never held the setup and whose URI the OAuth app never registered.
+     */
     private function redirectUri(): string
     {
-        $host = (string) ($_SERVER['HTTP_HOST'] ?? ('localhost:' . (getenv('PORT') ?: '8091')));
+        $host = self::requestHost();
+        if ($host === '') {
+            throw new \RuntimeException(self::NO_ORIGIN);
+        }
         return 'http://' . $host . '/callback';
     }
 
