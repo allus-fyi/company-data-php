@@ -48,6 +48,22 @@ final class Handlers implements Family
     /** The canned INVALID value the validation-demo submits once for an email field (spec §2). */
     private const INVALID_EMAIL = 'not-an-email';
 
+    /**
+     * The "what just happened" trace (#578). Every entry is `<SDK method> — <what that call did in THIS
+     * scenario>`, appended AT the call site, in the order the calls were made. The annotations are
+     * byte-identical in all six SDK examples — only the method reference is written in the language's own
+     * idiom — so one scenario teaches one thing whichever example a reader starts. Keep them in step when
+     * this handler changes.
+     */
+    private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
+    private const CALL_IDENTITY = 'Client::identity — GET /api/company-data/whoami: this service\'s own company_user_id, which the COMPANY party binds to';
+    private const CALL_CONNECTION = 'Client::connection — reads the configured connection; the connected person\'s id on it is what the CUSTOMER party binds to';
+    private const CALL_TRIGGER = 'Client::triggerFlowRun — starts a run of the published flow for that connection, pinning the flow\'s latest published version';
+    private const CALL_FLOW_RUN = 'Client::flowRun — re-read on every poll to see whose turn the run is on';
+    private const CALL_PROCESS = 'Client::processFlowRun — drives ONE company step: decrypts the answers so far, fills the node, type-checks the values, encrypts a copy per party, submits — and generates the document when the submit lands on a document-mode leaf';
+    private const CALL_ANSWERS = 'Client::flowRunAnswers — the completed run\'s answers, decrypted with the service key';
+    private const CALL_DOCUMENT = 'Client::flowRunDocument — downloads the company\'s own copy of the generated contract and decrypts it with the service key';
+
     public function __construct(private readonly Runtime $rt)
     {
     }
@@ -123,19 +139,20 @@ final class Handlers implements Family
 
         $calls = [];
         try {
+            $calls[] = self::CALL_SERVICE_BUILD;
             $client = $this->serviceClient();
 
             // The COMPANY party binds to this service's own company_user_id (#491 identity()).
+            $calls[] = self::CALL_IDENTITY;
             $identity = $client->identity();
-            $calls[] = 'Client::identity';
             $companyUserId = (string) ($identity['company_user_id'] ?? '');
             if ($companyUserId === '') {
                 return Response::json(['error' => 'identity_error', 'message' => 'identity() returned no company_user_id'], 502);
             }
 
             // The CUSTOMER party binds to the connected person's public personId (no public user_id).
+            $calls[] = self::CALL_CONNECTION;
             $connection = $client->connection($connectionId);
-            $calls[] = 'Client::connection';
             $personId = $connection->personId;
             if ($personId === null || $personId === '') {
                 return Response::json([
@@ -148,8 +165,8 @@ final class Handlers implements Family
                 self::PARTY_COMPANY => $companyUserId,
                 self::PARTY_CUSTOMER => $personId,
             ];
+            $calls[] = self::CALL_TRIGGER;
             $flowRun = $client->triggerFlowRun($flowId, $connectionId, $bindings);
-            $calls[] = 'Client::triggerFlowRun';
 
             $flowRunId = (string) ($flowRun->id ?? '');
             if ($flowRunId === '') {
@@ -212,9 +229,10 @@ final class Handlers implements Family
         }
 
         try {
+            $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_SERVICE_BUILD);
             $client = $this->serviceClient();
+            $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_FLOW_RUN);
             $flowRun = $client->flowRun($flowRunId);
-            $run['calls'] = $this->addCall($run['calls'] ?? [], 'Client::flowRun');
 
             $status = (string) ($flowRun->status ?? '');
             $companyParty = $flowRun->companyPartyKey();
@@ -277,9 +295,9 @@ final class Handlers implements Family
             return $fill;
         };
 
+        $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_PROCESS);
         try {
             $client->processFlowRun($flowRunId, $fillNode);
-            $run['calls'] = $this->addCall($run['calls'] ?? [], 'Client::processFlowRun');
             // Advanced: every field filled for this node was accepted.
             $steps = (array) ($run['steps'] ?? []);
             foreach ($filled as $f) {
@@ -296,7 +314,6 @@ final class Handlers implements Family
         } catch (ValidationError $e) {
             // The canned invalid value was rejected BEFORE submit — record it and mark the node so the
             // next poll submits the valid value (spec §2). The node did NOT advance.
-            $run['calls'] = $this->addCall($run['calls'] ?? [], 'Client::processFlowRun');
             $submitted = self::INVALID_EMAIL;
             foreach ($filled as $f) {
                 if ($f['slug'] === $e->slug) {
@@ -331,8 +348,8 @@ final class Handlers implements Family
      */
     private function complete(array $run, Client $client, FlowRun $flowRun, string $flowRunId): array
     {
+        $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_ANSWERS);
         $answers = $client->flowRunAnswers($flowRun);
-        $run['calls'] = $this->addCall($run['calls'] ?? [], 'Client::flowRunAnswers');
         $answersOut = [];
         foreach ($answers as $slug => $value) {
             $answersOut[] = ['slug' => (string) $slug, 'value' => $value];
@@ -341,8 +358,8 @@ final class Handlers implements Family
 
         if (($flowRun->outputMode ?? null) === 'document') {
             try {
+                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_DOCUMENT);
                 $bytes = $client->flowRunDocument($flowRunId);
-                $run['calls'] = $this->addCall($run['calls'] ?? [], 'Client::flowRunDocument');
                 $run['document'] = ['status' => 'downloaded', 'downloaded' => true, 'bytes' => strlen($bytes)];
             } catch (ApiError $e) {
                 // The run completed but the document is not retrievable yet — report it, don't fail.
@@ -425,18 +442,4 @@ final class Handlers implements Family
         };
     }
 
-    /**
-     * Append a call name preserving first-occurrence order (a poll may repeat flowRun across polls).
-     *
-     * @param list<string>|array<int,mixed> $calls
-     * @return list<string>
-     */
-    private function addCall(array $calls, string $name): array
-    {
-        $calls = array_map('strval', array_values($calls));
-        if (!in_array($name, $calls, true)) {
-            $calls[] = $name;
-        }
-        return $calls;
-    }
 }

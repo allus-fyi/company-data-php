@@ -70,6 +70,38 @@ final class Handlers implements Family
      */
     private const POLL_TRANSPORT_TIMEOUT_S = 2.0;
 
+    /**
+     * The "what just happened" trace (#578). Every entry is `<SDK method> — <what that call did in THIS
+     * scenario>`, appended AT the call site, in the order the calls were made; an entry wrapped in
+     * parentheses is a step that is deliberately NOT an SDK call. The annotations are byte-identical in
+     * all six SDK examples — only the method reference is written in the language's own idiom — so one
+     * scenario teaches one thing whichever example a reader starts. Keep them in step when this handler
+     * changes: the panel is headed "What just happened", and a list that no longer matches the code is
+     * worse than a short one.
+     */
+    private const CALL_IDW_BUILD = 'OAuthClient::fromConfig — builds the RP client from the saved config file: client id, secret and the registered redirect URI';
+    private const CALL_IDW_BUILD_LOCAL = 'new OAuthClient(Config::fromIdwFile(…)) — builds the RP client from the saved config file: client id, secret and the registered redirect URI';
+    private const CALL_AUTH_SIGNIN = 'OAuthClient::authorizeUrl — the consent URL the person is sent to (mode signin, response_mode redirect, PKCE S256, state = this run id)';
+    private const CALL_AUTH_SIGNIN_DETACHED = 'OAuthClient::authorizeUrl — the sign-in URL behind the link + QR (mode signin, response_mode detached, PKCE S256, state = this run id)';
+    private const CALL_AUTH_ONE_TIME = 'OAuthClient::authorizeUrl — the consent URL the person is sent to (mode one_time, claims email + phone, PKCE S256, state = this run id)';
+    private const CALL_AUTH_CONNECT = 'OAuthClient::authorizeUrl — the consent URL the person is sent to (mode connect, PKCE S256, state = this run id)';
+    private const CALL_AUTH_ENROLL = 'OAuthClient::authorizeUrl — the enrollment URL the person is sent to (mode 2fa_enroll, response_mode redirect)';
+    private const CALL_AUTH_ENROLL_DETACHED = 'OAuthClient::authorizeUrl — the enrollment URL behind the link + QR (mode 2fa_enroll, response_mode detached)';
+    private const CALL_POLL_SIGNIN = 'OAuthClient::pollResult — polls POST /oauth2/result until the phone delivers the code (one 2s-bounded call per browser poll)';
+    private const CALL_POLL_ENROLL = 'OAuthClient::pollResult — polls POST /oauth2/result until the phone delivers {enrolled: true} (one 2s-bounded call per browser poll)';
+    private const CALL_COMPLETE_SIGNIN = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, then reads GET /api/oauth/userinfo; mode signin returns the identity only, no claim values';
+    private const CALL_COMPLETE_ONE_TIME = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, reads GET /api/oauth/userinfo, and decrypts every claim value with the OAuth app private key';
+    private const CALL_COMPLETE_CONNECT = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, then reads GET /api/oauth/userinfo; connect delivers no values here, the live ones come from the data client below';
+    private const CALL_ENROLLED_CALLBACK = '(callback ?enrolled=true) — the redirect-leg enrollment outcome; there is nothing to exchange, so no further SDK call';
+    private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
+    private const CALL_CONNECTIONS_LIVE = 'Client::connections — pages GET /api/company-data/connections and decrypts each person\'s values with the service key; the run keeps the one whose share code just signed in';
+    private const CALL_TWO_FACTOR = 'Client::twoFactor — the service-2FA sub-client, on the same data-client credentials';
+    private const CALL_CHALLENGE = 'TwoFactorClient::challenge — POST /api/service-2fa/challenges for the person\'s share code with a per-run idempotency key; returns the challenge id, plus matching digits when the service has number matching on';
+    private const CALL_WAIT_RESULT = 'TwoFactorClient::waitForResult — polls GET /api/service-2fa/challenges/{id} until the status leaves pending: approved, denied, expired or revoked (one 2s-bounded call per browser poll; the first terminal read burns the result)';
+    private const CALL_OIDC_DISCOVERY = '(oidc) IssuerBuilder::build — discovery: fetches /.well-known/openid-configuration from the configured API base';
+    private const CALL_OIDC_AUTH_URL = '(oidc) AuthorizationService::getAuthorizationUri — the authorization URL (scope openid profile email, PKCE S256, nonce, state = this run id)';
+    private const CALL_OIDC_COMPLETE = '(oidc) AuthorizationService::callback — exchanges the code at the discovered token endpoint (client_secret_post + PKCE verifier), then verifies the id_token against the JWKS: signature, issuer, audience and nonce; the claims shown are that verified token\'s';
+
     public function __construct(private readonly Runtime $rt)
     {
     }
@@ -186,10 +218,14 @@ final class Handlers implements Family
                 $claims = $id === 3
                     ? $this->claimObjects($this->rt->readConfigMeta($sid)['claims'] ?? [])
                     : [];
+                $run['calls'] = [$this->idwBuildCall($id), match ($id) {
+                    3 => self::CALL_AUTH_ONE_TIME,
+                    4 => self::CALL_AUTH_CONNECT,
+                    default => self::CALL_AUTH_SIGNIN,
+                }];
                 $oauth = $this->oauthClientFor($id);
                 // redirectUri = null → the OAuthClient uses its config's oauth_redirect_uri.
                 $url = $oauth->authorizeUrl($mode, $claims, $runId, 'redirect', $pkce['challenge']);
-                $run['calls'] = ['OAuthClient::authorizeUrl'];
                 $this->rt->writeRun($runId, $run);
                 return Response::json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
 
@@ -197,9 +233,9 @@ final class Handlers implements Family
                 $pkce = Pkce::generate();
                 $run['verifier'] = $pkce['verifier'];
                 $run['wait'] = 'detached_signin';
+                $run['calls'] = [$this->idwBuildCall($id), self::CALL_AUTH_SIGNIN_DETACHED];
                 $oauth = $this->oauthClientFor($id);
                 $url = $oauth->authorizeUrl('signin', [], $runId, 'detached', $pkce['challenge']);
-                $run['calls'] = ['OAuthClient::authorizeUrl'];
                 $this->rt->writeRun($runId, $run);
                 return Response::json(['runId' => $runId, 'action' => ['type' => 'detached', 'url' => $url]]);
 
@@ -218,7 +254,7 @@ final class Handlers implements Family
                     'code_challenge' => $pkce['challenge'],
                     'code_challenge_method' => 'S256',
                 ]);
-                $run['calls'] = ['(oidc) IssuerBuilder::build', '(oidc) AuthorizationService::getAuthorizationUri'];
+                $run['calls'] = [self::CALL_OIDC_DISCOVERY, self::CALL_OIDC_AUTH_URL];
                 $this->rt->writeRun($runId, $run);
                 return Response::json(['runId' => $runId, 'action' => ['type' => 'redirect', 'url' => $url]]);
 
@@ -229,10 +265,10 @@ final class Handlers implements Family
                 $idempotencyKey = substr('demo-' . $runId, 0, 64); // backend-generated, per-run (SDK requires it)
                 $run['challengeIdemKey'] = $idempotencyKey;
                 $run['wait'] = 'challenge';
+                $run['calls'] = [self::CALL_SERVICE_BUILD, self::CALL_TWO_FACTOR, self::CALL_CHALLENGE];
                 $client = $this->serviceClientFor($id);
                 $challenge = $client->twoFactor()->challenge($shareCode, $idempotencyKey, $context);
                 $run['challengeId'] = $challenge->challengeId;
-                $run['calls'] = ['Client::twoFactor', 'TwoFactorClient::challenge'];
                 $this->rt->writeRun($runId, $run);
                 return Response::json([
                     'runId' => $runId,
@@ -267,7 +303,10 @@ final class Handlers implements Family
             'isEnroll' => true,
             'status' => 'pending',
             'state' => $runId,
-            'calls' => ['OAuthClient::authorizeUrl'],
+            'calls' => [
+                $this->idwBuildCall($id),
+                $responseMode === 'detached' ? self::CALL_AUTH_ENROLL_DETACHED : self::CALL_AUTH_ENROLL,
+            ],
             'wait' => $responseMode === 'detached' ? 'detached_enroll' : 'enroll_redirect',
         ];
         $this->rt->writeRun($runId, $run);
@@ -295,7 +334,7 @@ final class Handlers implements Family
                 // Redirect-leg enrollment outcome (#436) — nothing to exchange; record it.
                 $run['status'] = 'done';
                 $run['result'] = ['enrolled' => true];
-                $run['calls'][] = 'callback(enrolled=true)';
+                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_ENROLLED_CALLBACK);
             } elseif (isset($q['code']) && $q['code'] !== '') {
                 $code = (string) $q['code'];
                 if ($id === 5 || $id === 6) {
@@ -353,25 +392,25 @@ final class Handlers implements Family
         $id = (int) ($run['scenario'] ?? 0);
         try {
             if ($wait === 'detached_signin') {
+                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_POLL_SIGNIN);
                 $oauth = $this->oauthClientFor($id, self::POLL_TRANSPORT_TIMEOUT_S);
                 $body = $oauth->pollResult((string) $run['state'], 2, 2); // loop timeout=2, 2s transport
-                $run['calls'][] = 'OAuthClient::pollResult';
                 $code = (string) ($body['code'] ?? '');
                 if ($code !== '') {
                     $run = $this->completeSignin($run, $code);
                 }
             } elseif ($wait === 'detached_enroll') {
+                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_POLL_ENROLL);
                 $oauth = $this->oauthClientFor($id, self::POLL_TRANSPORT_TIMEOUT_S);
                 $body = $oauth->pollResult((string) $run['state'], 2, 2);
-                $run['calls'][] = 'OAuthClient::pollResult';
                 if (!empty($body['enrolled'])) {
                     $run['status'] = 'done';
                     $run['result'] = ['enrolled' => true];
                 }
             } elseif ($wait === 'challenge') {
+                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_WAIT_RESULT);
                 $client = $this->serviceClientFor($id, self::POLL_TRANSPORT_TIMEOUT_S);
                 $res = $client->twoFactor()->waitForResult((string) $run['challengeId'], 2, 2);
-                $run['calls'][] = 'TwoFactorClient::waitForResult';
                 $run['status'] = 'done';
                 $run['result'] = ['status' => $res->status, 'completed_at' => $res->completedAt];
             }
@@ -406,9 +445,13 @@ final class Handlers implements Family
     private function completeSignin(array $run, string $code): array
     {
         $id = (int) ($run['scenario'] ?? 0);
+        $run['calls'] = Runtime::addCall($run['calls'] ?? [], match ($id) {
+            3 => self::CALL_COMPLETE_ONE_TIME,
+            4 => self::CALL_COMPLETE_CONNECT,
+            default => self::CALL_COMPLETE_SIGNIN,
+        });
         $oauth = $this->oauthClientFor($id);
         $out = $oauth->completeSignIn($code, $run['verifier'] ?? null);
-        $run['calls'][] = 'OAuthClient::completeSignIn';
         $result = [
             'user' => $out['user'] ?? null,
             'mode' => $out['mode'] ?? null,
@@ -419,7 +462,9 @@ final class Handlers implements Family
         if ($id === 4) {
             // Connect: read the person's LIVE values via the service data client.
             $shareCode = (string) ($out['user']['share_code'] ?? '');
+            $run['calls'] = Runtime::addCall($run['calls'], self::CALL_SERVICE_BUILD);
             $client = $this->serviceClientFor($id);
+            $run['calls'] = Runtime::addCall($run['calls'], self::CALL_CONNECTIONS_LIVE);
             $live = [];
             foreach ($client->connections() as $conn) {
                 if ($shareCode !== '' && $conn->shareCode === $shareCode) {
@@ -427,7 +472,6 @@ final class Handlers implements Family
                     break;
                 }
             }
-            $run['calls'][] = 'Client::connections';
             $result['live_values'] = $live;
         }
 
@@ -451,13 +495,13 @@ final class Handlers implements Family
             'nonce' => (string) ($run['nonce'] ?? ''),
             'code_verifier' => (string) ($run['verifier'] ?? ''),
         ]);
+        $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_OIDC_COMPLETE);
         $tokenSet = $authService->callback(
             $oidcClient,
             ['code' => $code, 'state' => (string) $run['state']],
             $this->configRedirectUri($id),
             $session,
         );
-        $run['calls'][] = '(oidc) AuthorizationService::callback';
         $run['status'] = 'done';
         $run['result'] = ['claims' => $tokenSet->claims()];
         return $run;
@@ -479,11 +523,28 @@ final class Handlers implements Family
     {
         $path = $this->rt->configPathFor((string) $id);
         $transport = $transportTimeout !== null ? new CurlTransport($transportTimeout) : null;
-        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
-        if ($base === '' || $base === OAuthClient::DEFAULT_AUTHORIZE_URL) {
+        if ($this->usesDefaultAuthorizeBase($id)) {
             return OAuthClient::fromConfig($path, $transport); // null → the SDK's default CurlTransport
         }
+        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
         return new OAuthClient(Config::fromIdwFile($path), $transport ?? new CurlTransport(), authorizeBase: $base);
+    }
+
+    /**
+     * Whether {@see oauthClientFor()} takes the named-constructor branch. The SAME predicate decides the
+     * client AND the trace entry, so the panel can never name a constructor that did not run (#578) — the
+     * local-stack option really does build the client a different way.
+     */
+    private function usesDefaultAuthorizeBase(int $id): bool
+    {
+        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
+        return $base === '' || $base === OAuthClient::DEFAULT_AUTHORIZE_URL;
+    }
+
+    /** The trace entry for the OAuth client {@see oauthClientFor()} just built (#578). */
+    private function idwBuildCall(int $id): string
+    {
+        return $this->usesDefaultAuthorizeBase($id) ? self::CALL_IDW_BUILD : self::CALL_IDW_BUILD_LOCAL;
     }
 
     /**

@@ -374,4 +374,46 @@ final class Runtime
         }
         @rmdir($dir);
     }
+
+    // ── the "what just happened" trace (#578) ─────────────────────────────────
+
+    /**
+     * Append a call name to a run's trace, preserving first-occurrence order and skipping a repeat.
+     * ONE implementation for all three families (standards §1): several handlers can run twice for one
+     * run — /callback carries no already-completed guard, and the flow / company-data poll loops
+     * legitimately re-attempt the same call on every poll — so an unconditional append writes the same
+     * line again. The trace must read as what the run DID.
+     *
+     * **RECORD AT ATTEMPT TIME: call this IMMEDIATELY BEFORE the SDK call it names, never after.**
+     * A run that ends `failed` is still a run the panel reports, and the call the reader most needs to
+     * see is the one that threw — a bad client secret, a 429, a decrypt failure. An append placed after
+     * the call is skipped by the very exception the reader is trying to understand, so the panel would
+     * say only that the client was constructed. This is the same under-reporting #578 exists to remove,
+     * one path further in; the rule is the invariant, not a per-scenario habit. A bulk call records one
+     * entry per attempt, so a partial run shows exactly how far it got.
+     *
+     * @param list<string>|array<int,mixed> $calls
+     * @return list<string>
+     */
+    public static function addCall(array $calls, string $name): array
+    {
+        $calls = array_map('strval', array_values($calls));
+        if (!in_array($name, $calls, true)) {
+            $calls[] = $name;
+        }
+        return $calls;
+    }
+
+    /**
+     * {@see addCall()} against a run array in place. Returns true when the name was newly added, so the
+     * caller can persist on that transition.
+     *
+     * @param array<string,mixed> $run
+     */
+    public static function recordCall(array &$run, string $name): bool
+    {
+        $before = (array) ($run['calls'] ?? []);
+        $run['calls'] = self::addCall($before, $name);
+        return count((array) $run['calls']) !== count($before);
+    }
 }

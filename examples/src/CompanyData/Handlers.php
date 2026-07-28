@@ -52,6 +52,24 @@ final class Handlers implements Family
 
     private const DEFAULT_API_URL = 'https://api.allme.fyi';
 
+    /**
+     * The "what just happened" trace (#578). Every entry is `<SDK method> — <what that call did in THIS
+     * scenario>`, appended AT the call site, in the order the calls were made; an entry wrapped in
+     * parentheses is a step that is deliberately NOT an SDK call. The annotations are byte-identical in
+     * all six SDK examples — only the method reference is written in the language's own idiom — so one
+     * scenario teaches one thing whichever example a reader starts. Keep them in step when this handler
+     * changes.
+     */
+    private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
+    private const CALL_CONNECTIONS = 'Client::connections — pages GET /api/company-data/connections: loads your request-field catalog first for value typing, then decrypts each person\'s values with the service key';
+    private const CALL_REQUEST_FIELDS = 'Client::requestFields — GET /api/company-data/request-fields: your own request-field catalog, fetched once and cached for the life of the client';
+    private const CALL_PROCESS_CHANGES = 'Client::processChanges — drains the change feed through the crash-safe pump: handler before ack, at-least-once (dedup on Change.id), failures to the local dead-letter store';
+    private const CALL_CREATE_DOCUMENT = 'Client::createDocument — %s';
+    private const CALL_WEBHOOK_STARTED = '(webhook run started) — POST /webhook receives each delivery; every poll also drains the change feed as a fallback';
+    private const CALL_VERIFY_WEBHOOK = 'Client::verifyWebhook — checks the delivery\'s X-Allus-Signature HMAC against the secret configured for its X-Allus-Webhook-Id; a failure answers 401';
+    private const CALL_PARSE_WEBHOOK = 'Client::parseWebhook — turns the verified body into a typed Change, decrypting its value with the service key';
+    private const CALL_DRAIN_BATCH = 'Client::drainBatch — the per-poll feed fallback: one unbuffered drain, so events still show up when no delivery can reach this machine';
+
     public function __construct(private readonly Runtime $rt)
     {
     }
@@ -162,6 +180,7 @@ final class Handlers implements Family
         $runId = $this->rt->newRunId();
         $calls = [];
         try {
+            $calls[] = self::CALL_SERVICE_BUILD;
             $client = Client::fromConfig($this->rt->configPathFor($id));
             $result = $do($client, $calls);
             $this->rt->writeRun($runId, ['family' => self::FAMILY, 'scenario' => $id, 'status' => 'done', 'result' => $result, 'calls' => $calls]);
@@ -180,6 +199,7 @@ final class Handlers implements Family
      */
     private function doRead(Client $client, array &$calls): array
     {
+        $calls[] = self::CALL_CONNECTIONS;
         $connections = [];
         foreach ($client->connections() as $conn) {
             $values = [];
@@ -200,7 +220,6 @@ final class Handlers implements Family
                 'values' => $values,
             ];
         }
-        $calls[] = 'Client::connections';
         return ['connections' => $connections];
     }
 
@@ -213,6 +232,7 @@ final class Handlers implements Family
      */
     private function doDefinitions(Client $client, array &$calls): array
     {
+        $calls[] = self::CALL_REQUEST_FIELDS;
         $fields = [];
         foreach ($client->requestFields() as $f) {
             $fields[] = [
@@ -223,7 +243,6 @@ final class Handlers implements Family
                 'one_time' => $f->oneTime,
             ];
         }
-        $calls[] = 'Client::requestFields';
         return ['fields' => $fields];
     }
 
@@ -238,6 +257,7 @@ final class Handlers implements Family
      */
     private function doChanges(Client $client, array &$calls): array
     {
+        $calls[] = self::CALL_PROCESS_CHANGES;
         $events = [];
         $seen = [];
         $client->processChanges(function (Change $c) use (&$events, &$seen): void {
@@ -250,7 +270,6 @@ final class Handlers implements Family
             }
             $events[] = $this->projectChange($c, null);
         });
-        $calls[] = 'Client::processChanges';
         return ['events' => $events, 'drained' => true];
     }
 
@@ -316,6 +335,7 @@ final class Handlers implements Family
                 }
                 $opts['share_code'] = $shareCode;
             }
+            $calls[] = sprintf(self::CALL_CREATE_DOCUMENT, $spec['label']);
             $doc = $client->createDocument($opts);
             $docs[] = [
                 'index' => $i + 1,
@@ -324,7 +344,6 @@ final class Handlers implements Family
                 'status' => $doc->status,
             ];
         }
-        $calls[] = 'Client::createDocument ×' . count($specs);
         return ['docs' => $docs];
     }
 
@@ -351,7 +370,7 @@ final class Handlers implements Family
             'events' => [],
             'seenFeedIds' => [], // feed-only dedup set for the drainBatch() fallback
             'unparseable' => 0,
-            'calls' => ['(webhook run started — POST /webhook receives; each poll also drainBatch()s the feed)'],
+            'calls' => [self::CALL_WEBHOOK_STARTED],
         ]);
         $this->rt->writeRoute($webhookId, $runId);
         return Response::json(['runId' => $runId, 'action' => ['type' => 'none']]);
@@ -383,8 +402,9 @@ final class Handlers implements Family
             return Response::text('discarded: no active webhook run', 200);
         }
 
+        $this->recordCall($run, self::CALL_SERVICE_BUILD);
         $client = Client::fromConfig($this->rt->configPathFor(self::WEBHOOK));
-        $this->recordCall($run, 'Client::verifyWebhook');
+        $this->recordCall($run, self::CALL_VERIFY_WEBHOOK);
         if (!$client->verifyWebhook($rawBody, $headers)) {
             // A genuine signature failure — persist the attempted verify so the calls trace is truthful
             // even on the reject path (spec §4).
@@ -392,7 +412,7 @@ final class Handlers implements Family
             return Response::text('signature verification failed', 401);
         }
         try {
-            $this->recordCall($run, 'Client::parseWebhook');
+            $this->recordCall($run, self::CALL_PARSE_WEBHOOK);
             $change = $client->parseWebhook($rawBody, $headers);
             $run['events'][] = $this->projectChange($change, 'webhook');
         } catch (WebhookError $e) {
@@ -463,10 +483,11 @@ final class Handlers implements Family
             $seen[(string) $sid] = true;
         }
         try {
+            $buildNew = $this->recordCall($run, self::CALL_SERVICE_BUILD);
             $client = Client::fromConfig($this->rt->configPathFor(self::WEBHOOK));
             // Every poll ATTEMPTS the feed pull — record the call now (deduped), so an empty poll still
             // reports the drainBatch it performed rather than claiming no call (spec §4).
-            $drainNew = $this->recordCall($run, 'Client::drainBatch');
+            $drainNew = $this->recordCall($run, self::CALL_DRAIN_BATCH);
             $appended = false;
             foreach ($client->drainBatch() as $change) {
                 $cid = $change->id;
@@ -480,7 +501,7 @@ final class Handlers implements Family
                 $run['events'][] = $this->projectChange($change, 'feed');
                 $appended = true;
             }
-            if ($appended || $drainNew) {
+            if ($appended || $drainNew || $buildNew) {
                 $this->rt->writeRun($runId, $run);
             }
         } catch (\Throwable) {
@@ -499,11 +520,7 @@ final class Handlers implements Family
      */
     private function recordCall(array &$run, string $name): bool
     {
-        if (in_array($name, $run['calls'] ?? [], true)) {
-            return false;
-        }
-        $run['calls'][] = $name;
-        return true;
+        return Runtime::recordCall($run, $name); // ONE implementation for all three families (standards §1)
     }
 
     // ── Change projection ──────────────────────────────────────────────────────
