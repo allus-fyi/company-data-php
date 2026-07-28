@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 /**
- * Router for `php -S localhost:${PORT:-8091} router.php` (#494 — one server for all three families).
+ * Router for `php -S 0.0.0.0:${PORT:-8091} router.php` (#494 — one server for all three families;
+ * #553 — bound to all interfaces so a phone on the same network can reach it).
  *
  * SINGLE WORKER — PHP_CLI_SERVER_WORKERS is deliberately NOT set, so requests serialize and there is no
  * cross-request concurrency to guard. Every request (static bundle OR API OR the public POST /webhook OR

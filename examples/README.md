@@ -50,7 +50,8 @@ serves the example test suite — **all three scenario families** — on
    (a present, verified bundle is a cache hit — nothing is re-fetched),
 4. checks the bundle's `contract.json` version against the backend's (v3),
 5. refuses a busy port with a clear message, then
-6. serves `http://localhost:8091` — a **single-worker** `php -S` (do not set
+6. serves port `8091` on **all interfaces** (`php -S 0.0.0.0:8091`) and prints every
+   URL it is reachable on — a **single-worker** `php -S` (do not set
    `PHP_CLI_SERVER_WORKERS`).
 
 Open **http://localhost:8091** and pick any scenario. Each scenario's setup panel
@@ -61,6 +62,18 @@ panel shows the written path so you can open and read the real config; **Run** /
 **Trigger** then builds the SDK from that file (`OAuthClient::fromConfig` /
 `Client::fromConfig`) and runs off it. You never hand-create or edit the file — the
 backend writes it from your browser inputs; it is there to be read.
+
+**From a phone or another machine on the same network.** The server binds **all
+interfaces**, so any device on your network can reach it — startup prints the exact
+`http://<your-lan-ip>:8091` URL to type, alongside the localhost one. Open that URL on
+the phone and press **Save** there: the redirect URI written into the config file
+follows the origin you used, so register the same `http://<your-lan-ip>:8091/callback`
+on your OAuth app. Binding all interfaces also means **anyone on your network can reach
+this demo**, and its setup panels accept and store real credentials under
+`.runtime/config/` — OAuth and data-client secrets, private-key PEMs and their
+passphrases, and webhook signing secrets. It is a local developer example, not a
+hardened service: run it only on a network you trust, and only with sandbox
+credentials.
 
 **Port.** `8091` is the default, overridable with the `PORT` env var
 (`PORT=8092 composer start`). The default is the **same across all six SDK
@@ -90,9 +103,12 @@ prerequisites (e.g. the demo person having TOTP or email 2FA enabled for the 2FA
 scenarios, or being connected to your service for the connect / company-data / flow
 scenarios).
 
-For the **identity** OAuth scenarios, register the redirect URI
-**`http://localhost:8091/callback`** on every OAuth app you create (adjust the port
-if you set `PORT`).
+For the **identity** OAuth scenarios, register on every OAuth app you create the
+redirect URI matching the origin you open the portal on. The backend writes whichever origin your browser used into the scenario's
+config file, so the two must match: use **`http://localhost:8091/callback`** when you
+browse from this machine and **`http://<your-lan-ip>:8091/callback`** when you drive
+the example from a phone (the startup output prints the exact address). Adjust the
+port if you set `PORT`.
 
 For the **flow** scenario, import one of the two flow packages in `fixtures/` into
 the portal (service settings → Flows → Import) and **publish** it, then enter the

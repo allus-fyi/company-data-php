@@ -12,7 +12,9 @@ declare(strict_types=1);
  *      .frontend/<tag>/ (a present, verified bundle is a cache hit — nothing is re-fetched)
  *   4. assert the bundle's contract.json version == the backend's implemented contractVersion
  *   5. refuse a busy port with a clear message
- *   6. exec `php -S localhost:${PORT:-8091} router.php` — SINGLE WORKER (PHP_CLI_SERVER_WORKERS unset)
+ *   6. exec `php -S 0.0.0.0:${PORT:-8091} router.php` — SINGLE WORKER (PHP_CLI_SERVER_WORKERS unset),
+ *      bound to ALL interfaces so a phone on the same network can reach it, and printing every URL it
+ *      is reachable on (#553).
  */
 
 const CONTRACT_VERSION = 3; // must equal Server::CONTRACT_VERSION
@@ -69,22 +71,95 @@ if ((int) $bundleVersion !== CONTRACT_VERSION) {
     ));
 }
 
-// 5. port
+// 5. port — probe the SAME address the server binds (all interfaces), not just loopback
 $port = (int) (getenv('PORT') ?: 8091);
-$sock = @stream_socket_server("tcp://localhost:{$port}", $errno, $errstr);
+$sock = @stream_socket_server("tcp://0.0.0.0:{$port}", $errno, $errstr);
 if ($sock === false) {
     fail("port {$port} is busy ({$errstr}). Set PORT=<n> to use another port "
         . "(one browser origin is shared across SDK examples, so only one runs at a time).");
 }
 fclose($sock);
 
-// 6. serve — SINGLE WORKER (do NOT set PHP_CLI_SERVER_WORKERS)
-fwrite(STDERR, "serving http://localhost:{$port}  (all three scenario families; Ctrl-C to stop)\n");
-$cmd = escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg("localhost:{$port}") . ' ' . escapeshellarg('router.php');
+// 6. serve — SINGLE WORKER (do NOT set PHP_CLI_SERVER_WORKERS), on ALL interfaces (#553)
+printReachableUrls($port);
+$cmd = escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg("0.0.0.0:{$port}") . ' ' . escapeshellarg('router.php');
 passthru($cmd, $rc);
 exit($rc);
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Announce every URL the server is reachable on (#553).
+ *
+ * The server binds 0.0.0.0, so a phone on the same network can reach it — but only if the person
+ * holding the phone knows which address to type. Print the loopback URL AND every non-loopback IPv4
+ * address of this host, plus the plain warning that this is now open to the local network.
+ */
+function printReachableUrls(int $port): void
+{
+    fwrite(STDERR, "serving on ALL interfaces, port {$port}  (all three scenario families; Ctrl-C to stop)\n");
+    fwrite(STDERR, "  on this machine:  http://localhost:{$port}\n");
+    $lan = lanAddresses();
+    if ($lan === []) {
+        fwrite(STDERR, "  on this network:  (no non-loopback IPv4 address found — is this machine on a network?)\n");
+    } else {
+        foreach ($lan as $i => $addr) {
+            $label = $i === 0 ? '  on this network:  ' : '                    ';
+            fwrite(STDERR, "{$label}http://{$addr}:{$port}\n");
+        }
+    }
+    fwrite(STDERR, "  NOTE: anyone on your network can now reach this demo, and its setup panels accept and\n"
+        . "        store real credentials under .runtime/config/ — OAuth and data-client secrets,\n"
+        . "        private-key PEMs and their passphrases, and webhook signing secrets. It is a local\n"
+        . "        developer example, not a hardened service: run it only on a network you trust, and\n"
+        . "        only with sandbox credentials.\n");
+}
+
+/**
+ * EVERY non-loopback, non-link-local IPv4 address of this host, in interface order.
+ *
+ * Enumerates the interfaces — a route probe or a hostname lookup would return only ONE address
+ * on a laptop with Wi-Fi plus a VPN or a docker bridge, and not necessarily the reachable one.
+ * Down interfaces are skipped, matching Go/Java/C#'s "up" filter.
+ */
+function lanAddresses(): array
+{
+    $out = [];
+    if (function_exists('net_get_interfaces')) {
+        foreach (net_get_interfaces() ?: [] as $iface) {
+            if (($iface['up'] ?? true) !== true) {
+                continue;
+            }
+            foreach ($iface['unicast'] ?? [] as $unicast) {
+                $addr = (string) ($unicast['address'] ?? '');
+                if (isLanIpv4($addr)) {
+                    $out[] = $addr;
+                }
+            }
+        }
+    }
+    if ($out === []) {
+        // net_get_interfaces() is unavailable on some platforms (Windows) — fall back to a host
+        // lookup. Incomplete by construction (one hostname answer, not one per interface), which
+        // is why it runs only when real enumeration is unavailable.
+        $host = gethostname();
+        foreach ($host === false ? [] : (gethostbynamel($host) ?: []) as $addr) {
+            if (isLanIpv4($addr)) {
+                $out[] = $addr;
+            }
+        }
+    }
+    return array_values(array_unique($out));
+}
+
+/** IPv4 only — an IPv6 literal is not what anyone types into a phone. */
+function isLanIpv4(string $addr): bool
+{
+    if (filter_var($addr, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+        return false;
+    }
+    return !str_starts_with($addr, '127.') && !str_starts_with($addr, '169.254.');
+}
 
 function fetchBundle(string $base, string $frontend, string $tag, string $wantSha): void
 {
