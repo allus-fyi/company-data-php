@@ -201,6 +201,7 @@ the link-click path for that scenario locally.
 | **`frontend checksum MISMATCH`** | The downloaded `dist.tar.gz` doesn't match `frontend.lock`'s `sha256`. Fix the `sha256` (from `shasum -a 256 dist.tar.gz` on the real release) or re-download; the example refuses to serve an unverified bundle. |
 | **`could not download the pinned frontend release`** | The release/tag doesn't exist yet, or no network. If unpublished, seed the bundle into `.frontend/<tag>/` manually (the error prints the exact commands). |
 | **`dependencies not installed`** on a request | `vendor/` is missing — run `composer install` (or just `composer start`, which does it). |
+| **`server_error — PHP fatal error: … class AESKW\… is not available`** on an OIDC scenario | `spomky-labs/aes-key-wrap` is missing from `vendor/`. It is a **required** dependency of this suite (the OIDC library probes every JOSE algorithm on client build, and the key-wrap classes declare return types on `AESKW\*`). `composer install` restores it. |
 | **Webhook deliveries never arrive** | Your `localhost` isn't publicly reachable — open the `cloudflared` tunnel above and register the printed URL with `/webhook` appended. The change-feed fallback still shows events meanwhile. |
 | **A per-person / contract document errors** | Those types target a connected person — set the **target person share code** in the documents scenario's setup, then re-run. Broadcast documents need no target. |
 | **`start_failed` naming a missing connection / person** (flow) | The connection id is wrong or the person isn't connected to the service. The portal shows no per-service list of connected people — get the id by running the **Read connected people** scenario and opening its **Raw** view. |
@@ -211,7 +212,7 @@ the link-click path for that scenario locally.
 
 | Path | What it is |
 |---|---|
-| `composer.json` | The one composer sub-project — the SDK via path repo + the OIDC library. Not separately published, but its source ships **inside** the SDK's Composer package (#493). |
+| `composer.json` | The one composer sub-project — the SDK via path repo, the OIDC library, and `spomky-labs/aes-key-wrap` (the OIDC library probes every JOSE algorithm, and the key-wrap classes cannot be loaded without it — see *Troubleshooting*). Not separately published, but its source ships **inside** the SDK's Composer package (#493). |
 | `bin/start.php` | The one-command launcher (steps above). |
 | `router.php` | `php -S` router — serves the static bundle + the whole contract API + the public `POST /webhook` (company-data) + `GET /callback` (identity). |
 | `src/Server.php` | The **shared scaffolding**: HTTP dispatch, the aggregate `/api/meta`, static-bundle serving, and routing each scenario to its family by id. Contains no SDK calls. |

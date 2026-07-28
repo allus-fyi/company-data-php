@@ -27,6 +27,29 @@ final class Response
         return new self($status, 'json', json: $data);
     }
 
+    /**
+     * The contract's FAILURE envelope (#583): `{"error": "<token> — <reason>", "message": "<reason>"}`.
+     *
+     * The suite's shared client raises `body.error` VERBATIM and ignores every other key
+     * (`api.js` — `throw new Error(body.error || 'start failed (…)')`), so a bare token in `error`
+     * reaches the developer as one uninformative word and the REASON — which the backend has right
+     * there — is dropped. That is the swallowed failure of standards.html §9: a failure converted into
+     * something indistinguishable from any other failure. The token is kept and the reason appended in
+     * the shape this contract already uses for exactly this (`no_origin — …`, #574); `message` keeps the
+     * bare reason for a programmatic reader.
+     *
+     * NOT used for the token-only refusals the suite handles by STATUS rather than body — `409
+     * not_configured` (`startScenario` maps the 409 before reading the body) and `404 not_found`.
+     */
+    public static function failure(string $reason, string $token = 'server_error', int $status = 500): self
+    {
+        $reason = trim($reason);
+        return self::json([
+            'error' => $token . ' — ' . ($reason !== '' ? $reason : 'no reason was reported'),
+            'message' => $reason,
+        ], $status);
+    }
+
     public static function text(string $body, int $status = 200): self
     {
         return new self($status, 'text', text: $body);

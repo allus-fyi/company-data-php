@@ -147,7 +147,7 @@ final class Handlers implements Family
             $identity = $client->identity();
             $companyUserId = (string) ($identity['company_user_id'] ?? '');
             if ($companyUserId === '') {
-                return Response::json(['error' => 'identity_error', 'message' => 'identity() returned no company_user_id'], 502);
+                return Response::failure('identity() returned no company_user_id', 'identity_error', 502);
             }
 
             // The CUSTOMER party binds to the connected person's public personId (no public user_id).
@@ -155,10 +155,11 @@ final class Handlers implements Family
             $connection = $client->connection($connectionId);
             $personId = $connection->personId;
             if ($personId === null || $personId === '') {
-                return Response::json([
-                    'error' => 'connection_error',
-                    'message' => "connection {$connectionId} has no personId (not found or not connected)",
-                ], 502);
+                return Response::failure(
+                    "connection {$connectionId} has no personId (not found or not connected)",
+                    'connection_error',
+                    502,
+                );
             }
 
             $bindings = [
@@ -170,10 +171,10 @@ final class Handlers implements Family
 
             $flowRunId = (string) ($flowRun->id ?? '');
             if ($flowRunId === '') {
-                return Response::json(['error' => 'trigger_error', 'message' => 'triggerFlowRun returned no run id'], 502);
+                return Response::failure('triggerFlowRun returned no run id', 'trigger_error', 502);
             }
         } catch (ApiError | ConfigError $e) {
-            return Response::json(['error' => 'start_failed', 'message' => $e->getMessage()], 502);
+            return Response::failure($e->getMessage(), 'start_failed', 502);
         }
 
         $runId = $this->rt->newRunId();

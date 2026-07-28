@@ -33,6 +33,9 @@ final class Server
     /** @var array<string,Family> family key → handler (for run-dispatch by the run's recorded family) */
     private readonly array $families;
 
+    /** Whether this request already produced a response — read by the fatal-error shutdown guard (#583). */
+    private bool $emitted = false;
+
     public function __construct(
         private readonly Runtime $rt,
         private readonly string $frontendDir,
@@ -52,17 +55,54 @@ final class Server
 
     public function handle(): void
     {
-        $this->rt->ensureDirs();
-        $this->rt->sweep(); // lazy TTL sweep on every request (spec §3)
-
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $path = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
+        // Registered FIRST, and everything else is inside the try — request PREPROCESSING included
+        // (#583 review pass 1). Any unexpected Throwable or fatal there must meet the same envelope
+        // guarantee; both guards previously sat below preprocessing, leaving that path unguarded.
+        $this->guardFatal(); // the half `catch (\Throwable)` cannot reach (#583)
 
         try {
+            $this->rt->ensureDirs();
+            $this->rt->sweep(); // lazy TTL sweep on every request (spec §3)
+
+            $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+            $path = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
+
             $this->route($method, $path);
         } catch (\Throwable $e) {
-            $this->emit(Response::json(['error' => 'server_error', 'message' => $e->getMessage()], 500));
+            // The reason rides in `error` — the only key the suite renders (#583). An exception whose
+            // message is empty would otherwise report nothing at all, so its class stands in.
+            $this->emit(Response::failure($e->getMessage() !== '' ? $e->getMessage() : $e::class));
         }
+    }
+
+    /**
+     * PHP's FATAL errors are not `\Throwable` — a class-compatibility failure raised while AUTOLOADING a
+     * dependency (the exact #583 defect: `facile-it/php-openid-client` probes `class_exists()` over every
+     * JOSE algorithm, and `web-token/jwt-library`'s AES-key-wrap classes cannot be compiled unless
+     * `spomky-labs/aes-key-wrap` is installed) unwinds straight past `catch (\Throwable)`. PHP then emits
+     * a bare 500 with an EMPTY `text/html` body, so the suite has no `error` to render and falls back to
+     * printing the scenario number — "start failed (5)", which reads like an error code and names nothing.
+     *
+     * A shutdown handler is the only hook left after a fatal, so it emits the contract's failure envelope
+     * itself: same shape, so the suite renders the real reason instead of the fallback. It fires ONLY when
+     * the request produced no response of its own AND the last error is genuinely fatal — a normal request,
+     * and a request that merely logged a notice, are untouched.
+     */
+    private function guardFatal(): void
+    {
+        register_shutdown_function(function (): void {
+            if ($this->emitted || headers_sent()) {
+                return; // the request answered for itself, or output already began (static bundle)
+            }
+            $last = error_get_last();
+            $fatal = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR;
+            if ($last === null || ($last['type'] & $fatal) === 0) {
+                return;
+            }
+            $this->emit(Response::failure(
+                sprintf('PHP fatal error: %s (%s:%d)', $last['message'], $last['file'], $last['line']),
+            ));
+        });
     }
 
     private function route(string $method, string $path): void
@@ -176,6 +216,7 @@ final class Server
 
     private function emit(Response $r): void
     {
+        $this->emitted = true;
         http_response_code($r->status);
         switch ($r->kind) {
             case 'redirect':
@@ -229,6 +270,7 @@ final class Server
 
     private function serveStatic(string $path): void
     {
+        $this->emitted = true; // writes its own output, bypassing emit() — the fatal guard must not double-answer
         $rel = $path === '/' ? '/index.html' : $path;
         $full = realpath($this->frontendDir . $rel);
         $root = realpath($this->frontendDir);
