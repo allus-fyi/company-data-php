@@ -98,8 +98,9 @@ reaches everything naturally.
 
 You register the demo's OAuth apps / data clients / service in the **allus portal at
 [https://portal.allus.fyi](https://portal.allus.fyi)**. Each scenario's setup
-checklist in the UI names the exact portal pages and any person-account
-prerequisites (e.g. the demo person having TOTP or email 2FA enabled for the 2FA
+checklist in the UI names the exact portal pages, gives **the intended value for
+every control on each of them** — including the ones to leave alone — and lists any
+person-account prerequisites (e.g. the demo person having TOTP or email 2FA enabled for the 2FA
 scenarios, or being connected to your service for the connect / company-data / flow
 scenarios).
 
@@ -149,7 +150,7 @@ Inbound delivery to your `localhost` requires a public URL, which is **optional*
 ## Bumping the frontend pin
 
 The frontend ships as a checksummed release asset; the pin lives in `frontend.lock`
-(`{"tag":"v0.6.1","sha256":"<sha256 of dist.tar.gz>"}`) and covers the whole
+(`{"tag":"v0.6.2","sha256":"<sha256 of dist.tar.gz>"}`) and covers the whole
 examples tree. To move to a newer release: note the release **tag** and its
 `dist.tar.gz` checksum (`shasum -a 256 dist.tar.gz`) from
 `github.com/allme-sdk/example-test-suite`, set `tag` + `sha256` in `frontend.lock`,
@@ -194,7 +195,7 @@ the link-click path for that scenario locally.
 | **`dependencies not installed`** on a request | `vendor/` is missing — run `composer install` (or just `composer start`, which does it). |
 | **Webhook deliveries never arrive** | Your `localhost` isn't publicly reachable — open the `cloudflared` tunnel above and register the printed URL with `/webhook` appended. The change-feed fallback still shows events meanwhile. |
 | **A per-person / contract document errors** | Those types target a connected person — set the **target person share code** in the documents scenario's setup, then re-run. Broadcast documents need no target. |
-| **`start_failed` naming a missing connection / person** (flow) | The connection id is wrong or the person isn't connected to the service — check the connection in the portal. |
+| **`start_failed` naming a missing connection / person** (flow) | The connection id is wrong or the person isn't connected to the service. The portal shows no per-service list of connected people — get the id by running the **Read connected people** scenario and opening its **Raw** view. |
 
 ---
 
