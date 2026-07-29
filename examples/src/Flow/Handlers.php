@@ -349,9 +349,10 @@ final class Handlers implements Family
     {
         $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_ANSWERS);
         $answers = $client->flowRunAnswers($flowRun);
+        $ciphers = self::ownCipherBySlug($flowRun);
         $answersOut = [];
         foreach ($answers as $slug => $value) {
-            $answersOut[] = ['slug' => (string) $slug, 'value' => $value];
+            $answersOut[] = ['slug' => (string) $slug, 'value' => $value, 'cipher' => $ciphers[$slug] ?? null];
         }
         $run['answers'] = $answersOut;
 
@@ -369,6 +370,26 @@ final class Handlers implements Family
         $run['status'] = 'completed';
         $run['completed'] = true;
         return $run;
+    }
+
+    /**
+     * The company's own answer rows, keyed by slug and left as the still-encrypted wrapper the API
+     * returned — the evidence the "Decrypted answers" panel pairs against each cleartext value, so a
+     * reader can see the decrypt actually ran on real ciphertext rather than take it on faith.
+     *
+     * @return array<string,mixed>
+     */
+    private static function ownCipherBySlug(FlowRun $flowRun): array
+    {
+        $serviceUid = $flowRun->serviceUserId();
+        $out = [];
+        foreach ($flowRun->answers as $row) {
+            $slug = $row['slug'] ?? null;
+            if (is_string($slug) && ($row['for_user_id'] ?? null) === $serviceUid) {
+                $out[$slug] = $row['value'] ?? null;
+            }
+        }
+        return $out;
     }
 
     /**
