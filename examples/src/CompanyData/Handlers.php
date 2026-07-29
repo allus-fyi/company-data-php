@@ -22,7 +22,8 @@ use Allus\Examples\Runtime;
  *   changes     — Client::processChanges()      → a crash-safe pump drain (idempotent on Change.id)
  *   webhook     — verifyWebhook()+parseWebhook() → a public POST /webhook receiver + a drainBatch() feed
  *                                                  fallback; ONE accumulating run keyed by the webhook id
- *   documents   — Client::createDocument() ×6    → the six document/contract types
+ *   documents   — Client::createDocument()        → the document/contract types selected in setup
+ *                                                    (six offered, all ticked by default)
  *
  * Settings flow (amendment): the browser POSTs a scenario's setup values to /config, which writes them to
  * a canonical SDK config FILE (.runtime/config/{sid}.json). start() builds the Client from that file
@@ -131,6 +132,11 @@ final class Handlers implements Family
         }
         if ($id === self::DOCUMENTS) {
             $meta['share_code'] = (string) ($in['shareCode'] ?? ''); // the per-person/contract target
+            // Preserve presence so doDocuments() can distinguish an explicit empty selection from
+            // an absent selection; absence means all document types.
+            if (array_key_exists('documentTypes', $in)) {
+                $meta['document_types'] = array_values(array_map('strval', (array) $in['documentTypes']));
+            }
         }
 
         $configPath = $this->rt->writeConfig($id, $cfg);
@@ -272,41 +278,45 @@ final class Handlers implements Family
     }
 
     /**
-     * companydata:documents — Client::createDocument() for each of the six document/contract types
-     * (payloads verbatim from apitests/php/documents.php). The per-person / private / contract types
-     * target the connected person by share code (from the setup sidecar).
+     * companydata:documents — Client::createDocument() for each SELECTED document/contract type, of
+     * the six the scenario offers (payloads verbatim from apitests/php/documents.php). The
+     * per-person / private / contract types target the connected person by share code (from the
+     * setup sidecar). Selection comes from the sidecar's document_types list; absence means all six.
      *
      * @param array<int,string> $calls
      * @return array<string,mixed>
      */
     private function doDocuments(Client $client, array &$calls): array
     {
-        $shareCode = (string) ($this->rt->readConfigMeta(self::DOCUMENTS)['share_code'] ?? '');
+        $meta = $this->rt->readConfigMeta(self::DOCUMENTS);
+        $shareCode = (string) ($meta['share_code'] ?? '');
+        $hasTypes = array_key_exists('document_types', $meta);
+        $selectedTypes = array_map('strval', (array) ($meta['document_types'] ?? []));
         $pdf = self::minimalPdf(...);
         $specs = [
-            ['label' => 'Broadcast plaintext JSON (no target)', 'perPerson' => false, 'opts' => [
+            ['key' => 'broadcast_json', 'label' => 'Broadcast plaintext JSON (no target)', 'perPerson' => false, 'opts' => [
                 'name' => 'Service notice', 'payload_kind' => 'json',
                 'json_value' => ['msg' => 'Scheduled maintenance Sunday'],
             ]],
-            ['label' => 'Broadcast PDF file (no target)', 'perPerson' => false, 'opts' => [
+            ['key' => 'broadcast_pdf', 'label' => 'Broadcast PDF file (no target)', 'perPerson' => false, 'opts' => [
                 'name' => 'Price list', 'payload_kind' => 'file',
                 'file_bytes' => $pdf('Price list'), 'file_mime' => 'application/pdf',
             ]],
-            ['label' => 'Per-person NON-private file', 'perPerson' => true, 'opts' => [
+            ['key' => 'per_person_file', 'label' => 'Per-person NON-private file', 'perPerson' => true, 'opts' => [
                 'name' => 'Your invoice', 'payload_kind' => 'file',
                 'file_bytes' => $pdf('Your invoice'), 'file_mime' => 'application/pdf',
             ]],
-            ['label' => 'Per-person PRIVATE file (lock → reveal)', 'perPerson' => true, 'opts' => [
+            ['key' => 'per_person_private', 'label' => 'Per-person PRIVATE file (lock → reveal)', 'perPerson' => true, 'opts' => [
                 'name' => 'Confidential report', 'payload_kind' => 'file', 'is_private' => true,
                 'file_bytes' => $pdf('Confidential report'), 'file_mime' => 'application/pdf',
             ]],
-            ['label' => 'CONTRACT requiring SIGNATURE', 'perPerson' => true, 'opts' => [
+            ['key' => 'contract_signature', 'label' => 'CONTRACT requiring SIGNATURE', 'perPerson' => true, 'opts' => [
                 'name' => 'Service agreement', 'kind' => 'agreement', 'payload_kind' => 'file',
                 'requires_signature' => true,
                 'file_bytes' => $pdf('Service agreement'), 'file_mime' => 'application/pdf',
                 'metadata' => ['can_be_cancelled_in_app' => true],
             ]],
-            ['label' => 'CONTRACT requiring ACCEPTANCE', 'perPerson' => true, 'opts' => [
+            ['key' => 'contract_acceptance', 'label' => 'CONTRACT requiring ACCEPTANCE', 'perPerson' => true, 'opts' => [
                 'name' => 'Terms update', 'kind' => 'agreement', 'payload_kind' => 'json',
                 'requires_acceptance' => true, 'json_value' => ['version' => '2.0'],
                 'metadata' => [
@@ -323,7 +333,10 @@ final class Handlers implements Family
         ];
 
         $docs = [];
-        foreach ($specs as $i => $spec) {
+        foreach ($specs as $spec) {
+            if ($hasTypes && !in_array($spec['key'], $selectedTypes, true)) {
+                continue; // deselected in setup — the scenario runs exactly what was chosen
+            }
             $opts = $spec['opts'];
             if ($spec['perPerson']) {
                 if ($shareCode === '') {
@@ -336,7 +349,7 @@ final class Handlers implements Family
             $calls[] = sprintf(self::CALL_CREATE_DOCUMENT, $spec['label']);
             $doc = $client->createDocument($opts);
             $docs[] = [
-                'index' => $i + 1,
+                'index' => count($docs) + 1,
                 'label' => $spec['label'],
                 'document_id' => $doc->id,
                 'status' => $doc->status,

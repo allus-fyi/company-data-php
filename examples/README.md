@@ -6,7 +6,8 @@ its three scenario families, all served by **one command on one port**:
 - **Identity** — Sign in with allme (redirect / detached / one-time claims /
   connect), OIDC login, and standalone 2FA by allme.
 - **Company-data** — read connected people, request-field definitions, the change
-  feed, a webhook receiver, and the six document/contract types.
+  feed, a webhook receiver, and creating document/contract types (six offered,
+  pick which to create).
 - **Flow** — trigger and drive a contract flow end-to-end, then read the decrypted
   answers and download the generated signed document.
 
