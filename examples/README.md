@@ -4,7 +4,7 @@ A runnable website that demonstrates the `allus/company-data` **PHP SDK** across
 its three scenario families, all served by **one command on one port**:
 
 - **Identity** — Sign in with allme (redirect / detached / one-time claims /
-  connect), OIDC login + continue-on-your-phone, and standalone 2FA by allme.
+  connect), OIDC login, and standalone 2FA by allme.
 - **Company-data** — read connected people, request-field definitions, the change
   feed, a webhook receiver, and the six document/contract types.
 - **Flow** — trigger and drive a contract flow end-to-end, then read the decrypted
@@ -13,7 +13,7 @@ its three scenario families, all served by **one command on one port**:
 ~90 % of the logic is a shared frontend fetched from a pinned release; this
 directory is the thin PHP backend that implements the
 [demo-backend contract](https://github.com/allme-sdk/example-test-suite)
-(`CONTRACT.md`, **contract v3**) for **all 14 scenarios**. Everything the handlers
+(`CONTRACT.md`, **contract v3**) for **all 13 scenarios**. Everything the handlers
 do goes through the SDK's **intended top-level functions** — never internals, never
 raw platform HTTP; the OIDC scenarios use the standard third-party
 `facile-it/php-openid-client` library, which is the point of the OIDC demonstration.

@@ -23,8 +23,8 @@ use Facile\OpenIDClient\Session\AuthSession;
 
 /**
  * The IDENTITY scenario handlers (spec §3, config-file amendment): Sign in with allme (redirect / detached
- * / one-time claims / connect), OIDC login + continue-on-your-phone, and standalone service-2FA. Each
- * handler runs the intended SDK surface (or the OIDC library for scenarios 5/6). Handlers NEVER perform
+ * / one-time claims / connect), OIDC login, and standalone service-2FA. Each
+ * handler runs the intended SDK surface (or the OIDC library for scenario 5). Handlers NEVER perform
  * raw platform HTTP and NEVER block on SDK defaults — detached / challenge waits are short-cycled
  * (timeout=2) inside {@see run()}.
  *
@@ -41,7 +41,7 @@ final class Handlers implements Family
     /** id => "runnable" | "guide". Scenario 7 is the guide card (no /start). */
     private const SCENARIOS = [
         1 => 'runnable', 2 => 'runnable', 3 => 'runnable', 4 => 'runnable',
-        5 => 'runnable', 6 => 'runnable', 7 => 'guide', 8 => 'runnable',
+        5 => 'runnable', 7 => 'guide', 8 => 'runnable',
     ];
 
     /** Scenarios that also read live values through the service data {@see Client} (service-role keys). */
@@ -51,7 +51,7 @@ final class Handlers implements Family
      * Scenarios whose {@see OAuthClient::completeSignIn()} response can carry claim values (userinfo
      * `values` non-empty) and therefore need the OAuth app private key configured to decrypt them: mode
      * one_time and mode connect, both delivered as app-key ciphertext through userinfo. Mode signin
-     * (scenarios 1, 2) never carries values; scenario 8 never calls this leg at all; scenarios 5/6 run the
+     * (scenarios 1, 2) never carries values; scenario 8 never calls this leg at all; scenario 5 runs the
      * third-party OIDC library instead of this SDK's decrypt path.
      */
     private const CLAIM_VALUE_SCENARIOS = [3, 4];
@@ -248,7 +248,6 @@ final class Handlers implements Family
                 return Response::json(['runId' => $runId, 'action' => ['type' => 'detached', 'url' => $url]]);
 
             case 5: // OIDC login
-            case 6: // OIDC — continue on your phone
                 $pkce = Pkce::generate();
                 $nonce = bin2hex(random_bytes(16));
                 $run['verifier'] = $pkce['verifier'];
@@ -345,7 +344,7 @@ final class Handlers implements Family
                 $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_ENROLLED_CALLBACK);
             } elseif (isset($q['code']) && $q['code'] !== '') {
                 $code = (string) $q['code'];
-                if ($id === 5 || $id === 6) {
+                if ($id === 5) {
                     $run = $this->completeOidc($run, $code);
                 } else {
                     $run = $this->completeSignin($run, $code);
@@ -489,7 +488,7 @@ final class Handlers implements Family
     }
 
     /**
-     * Complete an OIDC sign-in (scenarios 5/6) via the third-party OIDC library — id_token verified.
+     * Complete an OIDC sign-in (scenario 5) via the third-party OIDC library — id_token verified.
      *
      * @param array<string,mixed> $run
      * @return array<string,mixed>
