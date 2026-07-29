@@ -6,7 +6,7 @@ namespace Allus\Examples;
 
 /**
  * Cross-request state for the whole example test suite — shared by all three scenario families (spec §3,
- * config-file amendment; #494 one-server restructure).
+ * config-file amendment; one-server restructure).
  *
  * Single-worker server → requests serialize; there is NO concurrency to guard, so there are NO locks,
  * NO tombstones and NO burn-on-read. Everything lives under ONE {@see $runtimeDir} (git-ignored, wiped at
@@ -375,7 +375,7 @@ final class Runtime
         @rmdir($dir);
     }
 
-    // ── the "what just happened" trace (#578) ─────────────────────────────────
+    // ── the "what just happened" trace ────────────────────────────────────────
 
     /**
      * Append a call name to a run's trace, preserving first-occurrence order and skipping a repeat.
@@ -388,8 +388,8 @@ final class Runtime
      * A run that ends `failed` is still a run the panel reports, and the call the reader most needs to
      * see is the one that threw — a bad client secret, a 429, a decrypt failure. An append placed after
      * the call is skipped by the very exception the reader is trying to understand, so the panel would
-     * say only that the client was constructed. This is the same under-reporting #578 exists to remove,
-     * one path further in; the rule is the invariant, not a per-scenario habit. A bulk call records one
+     * say only that the client was constructed. This is the same under-reporting this rule exists to
+     * remove, one path further in; the rule is the invariant, not a per-scenario habit. A bulk call records one
      * entry per attempt, so a partial run shows exactly how far it got.
      *
      * @param list<string>|array<int,mixed> $calls

@@ -18,7 +18,7 @@ class ApiError extends \RuntimeException
     /**
      * @param array<string,mixed> $details the error body's remaining fields, verbatim.
      *
-     * #590 added the first response that carries actionable data BESIDE the key: a 410
+     * Some responses carry actionable data BESIDE the key: a 410
      * {@code company_data.file_expired} returns the expired answer's {@code content_sha256} and
      * {@code expired_at}, so a consumer can record that its archived copy is now the only one and
      * still prove what it holds. Generic rather than a bespoke subclass — every error body's extra

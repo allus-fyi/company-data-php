@@ -8,9 +8,9 @@ use Allus\CompanyData\FieldValidation;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Field-type value validation parity — every case in the shared vector must pass. The same
- * {@code contract-field-validation-vector.json} pins the web reference
- * ({@code frontend/src/fieldValidation.js}) + the iOS/Android/SDK ports.
+ * Field-type value validation parity — every case in the shared
+ * {@code contract-field-validation-vector.json} vector must pass, keeping this port
+ * byte-aligned with every other implementation of the same contract.
  */
 final class FieldValidationTest extends TestCase
 {

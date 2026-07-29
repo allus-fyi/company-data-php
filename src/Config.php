@@ -88,7 +88,7 @@ final class Config
         'keyPassphrase',
     ];
 
-    /** Customer role (#168): the acct_* pair + account key (the decrypt key). */
+    /** Customer role: the acct_* pair + account key (the decrypt key). */
     private const REQUIRED_CUSTOMER = [
         'apiUrl',
         'customerClientId',
@@ -96,7 +96,7 @@ final class Config
         'accountPrivateKey',
     ];
 
-    /** "Sign in with allme" idw role (#195): only the client id + redirect are required. */
+    /** "Sign in with allme" idw role: only the client id + redirect are required. */
     private const REQUIRED_IDW = [
         'apiUrl',
         'oauthClientId',
@@ -132,7 +132,7 @@ final class Config
         public readonly ?array $webhookBasic = null,        // {"username","password"} → Basic auth
         public readonly ?array $webhookHeader = null,       // {"name","value"} → custom header
         public readonly bool $webhookAuthNone = false,      // explicit opt-out — verify always true
-        // "Sign in with allme" idw role (#195). oauthPrivateKey + oauthKeyPassphrase are needed only
+        // "Sign in with allme" idw role. oauthPrivateKey + oauthKeyPassphrase are needed only
         // to decrypt one_time claim values (config-only key handling).
         public readonly ?string $oauthClientId = null,
         public readonly ?string $oauthRedirectUri = null,
@@ -172,7 +172,7 @@ final class Config
     }
 
     /**
-     * Load a CUSTOMER-role config (#168) from a JSON file — requires the acct_*
+     * Load a CUSTOMER-role config from a JSON file — requires the acct_*
      * pair + account key, not the service PEM. Env vars override file values.
      */
     public static function fromCustomerFile(string $path): self
@@ -200,7 +200,7 @@ final class Config
     }
 
     /**
-     * Load an IDW-role config (#195, "Sign in with allme") from a JSON file — requires the
+     * Load an IDW-role config ("Sign in with allme") from a JSON file — requires the
      * oauth_client_id + oauth_redirect_uri. Env vars override file values.
      */
     public static function fromIdwFile(string $path): self
@@ -271,8 +271,9 @@ final class Config
         }
 
         // Alternative webhook auth methods (file-config only — no env overrides).
-        // Validate object shapes. Truthiness mirrors the Python reference
-        // (`if bearer:` / `not basic.get(...)`), not PHP's empty() (which would
+        // Validate object shapes. Truthiness follows the shared falsy-value contract
+        // (`pyTruthy` below) — empty string, 0, null and empty containers are absent, but a
+        // non-empty string (including "0") counts as present — not PHP's empty() (which would
         // also reject the string "0").
         $bearer = null;
         $rawBearer = $data['webhook_bearer_token'] ?? null;
@@ -452,8 +453,7 @@ final class Config
     }
 
     /**
-     * Python-style truthiness, used to mirror the reference's webhook-auth
-     * presence checks exactly (`if bearer:` / `not basic.get("username")`).
+     * The shared falsy-value contract used for the webhook-auth presence checks.
      * Falsy for: null, false, "", 0, 0.0, []. Notably the string "0" is TRUTHY
      * (unlike PHP's empty()).
      */

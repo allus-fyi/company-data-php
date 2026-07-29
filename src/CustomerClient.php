@@ -18,7 +18,7 @@ use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
 use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
 
 /**
- * The CUSTOMER-role client (b2b, #168).
+ * The CUSTOMER-role client (b2b).
  *
  * `CustomerClient` is what a connecting company uses to consume and answer another
  * company's service over its `acct_*` credentials: list company↔company connections,
@@ -45,7 +45,7 @@ final class CustomerClient
     private readonly ?RSAPrivateKey $accountEnvelopeKey;
     /** @var array<string,?RSAPublicKey> */
     /**
-     * #344 review pass 3 — why this SDK has NO generation counter, unlike Go/Java/C#/TS/Python.
+     * Why this SDK has NO generation counter for the public-key cache.
      *
      * The lost-invalidation race needs a window between the cache check and the store in which
      * `invalidatePublicKey` can run. PHP's request-scoped, single-threaded execution model has no
@@ -54,14 +54,14 @@ final class CustomerClient
      *
      * This exemption is a property of the RUNTIME, not of this code. If this client is ever
      * wrapped in an async runtime (Swoole, Fibers, ReactPHP) or shared across threads, it inherits
-     * the race and MUST gain the same generation counter the other five SDKs carry.
+     * the race and MUST gain a generation counter.
      */
     private array $pubkeyCache = [];
     /** @var array<string,?RSAPublicKey> */
     private array $serviceKeyCache = [];
     /**
      * "companyCode/serviceCode" → {request_field_id: field_type}, resolved from the
-     * connect-screen lookup for typed-answer validation (#302).
+     * connect-screen lookup for typed-answer validation.
      *
      * @var array<string,array<string,string>>
      */
@@ -286,7 +286,7 @@ final class CustomerClient
     }
 
     /**
-     * #344 — drop a person's cached public key by user id. The changes feed calls this for you;
+     * Drop a person's cached public key by user id. The changes feed calls this for you;
      * call it yourself when consuming `key_rotated` over a webhook (the verifier is static and has
      * no client instance).
      */
@@ -296,7 +296,7 @@ final class CustomerClient
     }
 
     /**
-     * #411 — drop a SERVICE's cached public key, so the next answer/document encrypted to it
+     * Drop a SERVICE's cached public key, so the next answer/document encrypted to it
      * refetches. The mirror of {@see invalidatePublicKey}, in the service→customer direction.
      *
      * The changes feed calls this for you on a `service_key_rotated` event; call it yourself when
@@ -306,7 +306,7 @@ final class CustomerClient
      * No generation counter here, for the same runtime reason recorded on `$pubkeyCache` above:
      * PHP's request-scoped, single-threaded model has no window between the cache check and the
      * store in which this method could run. Under an async runtime it inherits the race and needs
-     * the counter the other five SDKs carry.
+     * a generation counter.
      */
     public function invalidateServiceKey(string $companyCode, string $serviceCode): void
     {
@@ -316,10 +316,10 @@ final class CustomerClient
     /** @param array<string,mixed> $event */
     private function decryptChange(array $event): Change
     {
-        // #344: a service gets no pushes, so the feed is its only rotation signal — without this
+        // A service gets no pushes, so the feed is its only rotation signal — without this
         // the cached key (including a cached `null`) would outlive the rotation for the whole
         // process lifetime.
-        // #344: the pull feed names it `event`; a raw webhook body names it `action` (and on
+        // The pull feed names it `event`; a raw webhook body names it `action` (and on
         // document rows `action` carries signed|accepted|cancelled instead) — so match either key.
         if (($event['event'] ?? null) === 'key_rotated' || ($event['action'] ?? null) === 'key_rotated') {
             $personId = $event['person_user_id'] ?? $event['person_id'] ?? null;
@@ -327,7 +327,7 @@ final class CustomerClient
                 $this->invalidatePublicKey($personId);
             }
         }
-        // #411: a service this customer connects to replaced its keypair. Same either-key match:
+        // A service this customer connects to replaced its keypair. Same either-key match:
         // the pull feed names it `event`, a raw webhook body names it `action`.
         if (($event['event'] ?? null) === 'service_key_rotated' || ($event['action'] ?? null) === 'service_key_rotated') {
             $companyCode = $event['company_share_code'] ?? null;
@@ -415,7 +415,7 @@ final class CustomerClient
     /**
      * Resolve {request_field_id: field_type} for a service from the connect-screen lookup,
      * cached per company/service. Best-effort — a lookup failure yields an empty map so
-     * typed-answer validation is simply skipped (#302).
+     * typed-answer validation is simply skipped.
      *
      * @return array<string,string>
      */
@@ -459,7 +459,7 @@ final class CustomerClient
         if ($pub === null) {
             throw new ConfigError("no service key for {$companyCode}/{$serviceCode}");
         }
-        // #302: validate each typed answer against its request row's field type BEFORE
+        // Validate each typed answer against its request row's field type BEFORE
         // encryption. The type is resolved server-side from the connect-screen lookup
         // (cached per service); an answer whose type can't be resolved is skipped.
         $types = $this->requestFieldTypes($companyCode, $serviceCode);

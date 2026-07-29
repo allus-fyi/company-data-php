@@ -21,7 +21,7 @@ final class Connection
         public readonly ?string $displayName,
         public readonly ?\DateTimeImmutable $connectedAt,
         public readonly array $values = [],
-        /** The connected customer's TYPE: "person"|"company" (B2B, #163); null on older API. */
+        /** The connected customer's TYPE: "person"|"company" (B2B); null on older API. */
         public readonly ?string $customerType = null,
         /** The customer's profile share code (previously only via {@see $raw}); null when absent. */
         public readonly ?string $shareCode = null,

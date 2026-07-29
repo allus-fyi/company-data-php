@@ -153,7 +153,7 @@ final class CryptoTest extends TestCase
 
     public function testBinaryHandleLazyFetchAndDecrypt(): void
     {
-        // #590: the fetch callback classifies the response. Here it reports the ENCRYPTED shape —
+        // The fetch callback classifies the response. Here it reports the ENCRYPTED shape —
         // what the route serves when the person's source field is private.
         $captured = [];
         $fetch = function (string $url) use (&$captured): BinaryFetchResult {

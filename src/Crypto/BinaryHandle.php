@@ -15,7 +15,7 @@ use Allus\CompanyData\Util\AtomicFile;
  * {@see save()} GET that URL and return the FILE BYTES either way — the caller
  * never has to know which of the two response shapes arrived.
  *
- * #590 — THERE ARE TWO SHAPES, AND WHICH ONE ARRIVES IS THE PERSON'S CHOICE, NOT THE
+ * THERE ARE TWO SHAPES, AND WHICH ONE ARRIVES IS THE PERSON'S CHOICE, NOT THE
  * COMPANY'S. Whether the person's source field is private decides it, they can change it at
  * any time, and nothing in the API announces it in advance:
  *

@@ -53,11 +53,9 @@ final class Handlers implements Family
     private const DEFAULT_API_URL = 'https://api.allme.fyi';
 
     /**
-     * The "what just happened" trace (#578). Every entry is `<SDK method> — <what that call did in THIS
+     * The "what just happened" trace. Every entry is `<SDK method> — <what that call did in THIS
      * scenario>`, appended AT the call site, in the order the calls were made; an entry wrapped in
-     * parentheses is a step that is deliberately NOT an SDK call. The annotations are byte-identical in
-     * all six SDK examples — only the method reference is written in the language's own idiom — so one
-     * scenario teaches one thing whichever example a reader starts. Keep them in step when this handler
+     * parentheses is a step that is deliberately NOT an SDK call. Keep them in step when this handler
      * changes.
      */
     private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
@@ -250,7 +248,7 @@ final class Handlers implements Family
      * companydata:changes — Client::processChanges() drains the feed on start through the crash-safe pump
      * (handler-before-ack, at-least-once), so the append handler is idempotent on the pull-feed Change.id
      * (spec §2, sdk.html §6.1). Each event is the rendered-column projection PLUS a raw object with the
-     * full public Change fields (so the frontend's JSON.stringify(result) Raw view shows the extras).
+     * full public Change fields, so a raw view of the event can still show its extras.
      *
      * @param array<int,string> $calls
      * @return array<string,mixed>
@@ -353,7 +351,7 @@ final class Handlers implements Family
      * Start the single accumulating webhook run (spec §2/§3). Persists the routing record
      * webhookId → runId (superseding any prior active webhook run) and returns {action:{type:"none"}} —
      * there is NO long-poll (it would wedge the single worker). Events arrive via POST /webhook and via a
-     * per-poll drainBatch() feed fallback; the frontend reads the growing list through GET /api/runs.
+     * per-poll drainBatch() feed fallback; the growing list is exposed via GET /api/runs for polling.
      */
     private function startWebhook(): Response
     {
@@ -527,10 +525,10 @@ final class Handlers implements Family
 
     /**
      * The rendered-column projection of a Change PLUS a raw object holding the full public Change fields
-     * (Change.php:26-59) so the frontend's JSON.stringify(result) Raw view can show the event-specific
-     * extras — the compact renderer uses only the leading columns and ignores raw (spec §2.3). Nothing is
-     * dropped from result. $source labels a webhook delivery vs a pull-feed row (null for the changes
-     * scenario, where every row is a pull-feed drain).
+     * so a raw view of the event can still show its event-specific extras — the compact renderer uses
+     * only the leading columns and ignores raw (spec §2.3). Nothing is dropped from result. $source
+     * labels a webhook delivery vs a pull-feed row (null for the changes scenario, where every row is a
+     * pull-feed drain).
      *
      * @return array<string,mixed>
      */
@@ -581,7 +579,7 @@ final class Handlers implements Family
     /**
      * Render a decrypted value for JSON. A binary value is a lazy {@see BinaryHandle} — resolve its bytes
      * to a short descriptor (spec §6 scenario 4: a binary document event resolves its value_url) rather
-     * than dumping raw bytes; a structured value stays an array (the frontend JSON-stringifies it).
+     * than dumping raw bytes; a structured value stays an array so it remains valid JSON as-is.
      */
     private function stringifyValue(mixed $v): mixed
     {

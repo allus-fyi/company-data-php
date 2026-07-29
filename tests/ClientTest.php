@@ -235,7 +235,7 @@ final class ClientTest extends TestCase
     }
 
     /**
-     * #590 — the SAME slot URL serves raw file bytes when the person's source field is NOT private.
+     * The SAME slot URL serves raw file bytes when the person's source field is NOT private.
      * The handle must return the file either way, without the caller knowing which shape arrived, and
      * must not try to decrypt bytes that were never encrypted.
      */
@@ -269,7 +269,7 @@ final class ClientTest extends TestCase
         self::assertSame(hash('sha256', $bytes), $handle->contentSha256());
     }
 
-    /** #590 — a 410 file_expired surfaces the digest and the expiry date through ApiError::$details. */
+    /** A 410 file_expired surfaces the digest and the expiry date through ApiError::$details. */
     public function testBinaryHandleExpiredAnswerCarriesDigest(): void
     {
         $page = ['total' => 1, 'items' => [[
@@ -304,7 +304,7 @@ final class ClientTest extends TestCase
     }
 
     /**
-     * #590 — the encrypted shape must still parse for an XML-configured client. The classification
+     * The encrypted shape must still parse for an XML-configured client. The classification
      * rule routes an `application/xml` response to the STRUCTURED path, so if that path hard-coded
      * `json_decode` the SDK would fail on every binary value in xml mode — a regression invisible to
      * every other test, because nothing else exercises xml on this route.
@@ -534,7 +534,7 @@ final class ClientTest extends TestCase
     public function testCreateDocumentShareCodeOnlyIsPerPersonEncrypted(): void
     {
         // A share_code-only target (no connection_id / person_user_id) must be
-        // PER-PERSON (encrypted to that recipient), NOT a plaintext broadcast (issue #29).
+        // PER-PERSON (encrypted to that recipient), NOT a plaintext broadcast.
         $spki = Vector::publicSpkiB64();
         $keysFetched = 0;
         $getRouter = function (string $url, ?array $q) use ($spki, &$keysFetched): Response {
@@ -724,7 +724,7 @@ final class ClientTest extends TestCase
     /**
      * A failed /file upload best-effort deletes the just-created (still
      * {"_pending": true}) document and re-throws the ORIGINAL upload error, so a
-     * failed createDocument leaves no dangling document behind (issue #27).
+     * failed createDocument leaves no dangling document behind.
      */
     public function testCreateDocumentFileUploadFailureDeletesCreatedDoc(): void
     {

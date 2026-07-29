@@ -10,7 +10,7 @@ use Allus\CompanyData\Model\TwoFactorChallenge;
 use Allus\CompanyData\Model\TwoFactorResult;
 
 /**
- * #436 2FA-by-allme — the relying-party challenge API (spec §3), on the SERVICE's data-client credentials
+ * 2FA-by-allme — the relying-party challenge API (spec §3), on the SERVICE's data-client credentials
  * (the same auth {@see Client} uses). Reached via {@see Client::twoFactor()}.
  *
  * A service asks a person (by `share_code`) to approve a login inside the allme app, then polls for the
@@ -60,7 +60,7 @@ final class TwoFactorClient
      * Poll {@see result()} until the status is terminal (no longer "pending") and return that first
      * terminal {@see TwoFactorResult}.
      *
-     * Convenience over a manual result() loop (#481; mirrors the detached OAuthClient::pollResult
+     * Convenience over a manual result() loop (mirrors the detached OAuthClient::pollResult
      * precedent). Because the first terminal read burns the challenge, this returns as soon as the
      * status leaves "pending" — it never re-reads a consumed result. Throws {@see ApiError} if
      * `$timeout` seconds elapse while still pending; `$interval` is the seconds between polls.

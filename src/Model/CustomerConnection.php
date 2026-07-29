@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Model;
 
 /**
- * Customer-role connection model (b2b, #168).
+ * Customer-role connection model (b2b).
  *
  * A CUSTOMER is the connecting company consuming/answering another company's service.
  * Its {@code GET /api/company-connections} payload is one row per company↔company pair,

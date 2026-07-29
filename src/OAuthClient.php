@@ -13,7 +13,7 @@ use Allus\CompanyData\Http\Response;
 use Allus\CompanyData\Http\Transport;
 
 /**
- * "Sign in with allme" — the RP-side OAuth client (#195).
+ * "Sign in with allme" — the RP-side OAuth client.
  *
  * A third-party site embeds a "Sign in with allme" button, sends the person to the hosted consent
  * screen, and — once they approve — receives an authorization code at its redirect URI. This wraps
@@ -113,14 +113,14 @@ final class OAuthClient
             if ($c->type === '' || in_array($c->type, self::NON_CLAIMABLE, true)) {
                 continue;
             }
-            // #498 §2: `name` is the claim's identity and it is mandatory. Refused HERE rather than
+            // §2: `name` is the claim's identity and it is mandatory. Refused HERE rather than
             // left to the API, so the integration error surfaces at the call that made it.
             $name = trim($c->name);
             if ($name === '') {
-                throw new ConfigError('every claim must carry a `name` (#498)');
+                throw new ConfigError('every claim must carry a `name`');
             }
             if (isset($seen[$name])) {
-                throw new ConfigError("duplicate claim name '{$name}' (#498)");
+                throw new ConfigError("duplicate claim name '{$name}'");
             }
             $seen[$name] = true;
             $entry = ['name' => $name, 'type' => $c->type];
@@ -187,12 +187,12 @@ final class OAuthClient
     /**
      * Exchange + userinfo in one call, decrypting one_time values via the configured app key.
      *
-     * #498 §5: `user['sub']` IS the person's SHARE CODE and is byte-identical to the id_token's
+     * §5: `user['sub']` IS the person's SHARE CODE and is byte-identical to the id_token's
      * `sub`; `share_code` is retained beside it for compatibility and now simply equals it.
      * `display_name` is GONE — it is a consented `name` claim now, or nothing: ask for
      * `new Claim(name: 'name', type: 'text')` and read `$result['values']['name']`.
      *
-     * #498 §3.1a: `attestations` is an ADDITIVE sibling map, keyed by the SAME claim name as
+     * §3.1a: `attestations` is an ADDITIVE sibling map, keyed by the SAME claim name as
      * `values`, present only for a `verified` claim under ENCRYPTED delivery. An integration that
      * never reads it behaves exactly as before. Each entry is
      * `{verified: bool, hash: string, salt: string, verifiedAt: string}` — `verified` is recomputed
@@ -235,7 +235,7 @@ final class OAuthClient
     }
 
     /**
-     * #498 §3.1a — open the app-key-sealed attestations and attest each value ourselves.
+     * §3.1a — open the app-key-sealed attestations and attest each value ourselves.
      *
      * A SECOND decrypt per verified claim: `values` is byte-identical to before, but each attestation
      * is its own `{"_enc":1,...}` object. A passthrough accessor handing back an undecrypted blob
@@ -317,7 +317,7 @@ final class OAuthClient
      * Poll /oauth2/result for a detached sign-in or enrollment (single-delivery).
      *
      * A detached sign-in delivers `{code, state}`; a detached `2fa_enroll` delivers
-     * `{enrolled: true, state}` (#481). Returns on the first delivered shape (`code` OR `enrolled`)
+     * `{enrolled: true, state}`. Returns on the first delivered shape (`code` OR `enrolled`)
      * and never polls past it, so a one-shot enrollment result is not consumed and lost.
      *
      * @return array<string,mixed>
@@ -333,7 +333,7 @@ final class OAuthClient
             $res = $this->transport->post("{$this->apiUrl}/oauth2/result", $form, ['Accept' => 'application/json']);
             if ($res->status === 200) {
                 $body = self::decodeObject($res->body);
-                // #481: return on the first delivered terminal shape — a sign-in `code` OR a
+                // Return on the first delivered terminal shape — a sign-in `code` OR a
                 // 2fa_enroll `enrolled` sentinel ({enrolled: true, state}). Both are one-shot;
                 // returning here (rather than looping) keeps an enrollment result from being
                 // consumed and lost to a timeout.

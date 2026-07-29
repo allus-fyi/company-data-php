@@ -166,7 +166,7 @@ final class HttpClient
     /**
      * GET returning the whole 2xx {@see Response} — status, headers AND raw body, with no parse.
      *
-     * #590: the company-facing binary file endpoints have two 200 shapes (a JSON wrapper for an
+     * The company-facing binary file endpoints have two 200 shapes (a JSON wrapper for an
      * encrypted answer, raw file bytes for a plaintext one) that are told apart by
      * {@code Content-Type}, and both carry an {@code X-Allus-Content-Sha256} digest header. Neither
      * {@see get} (which parses) nor {@see getRaw} (which drops the headers) can express that, so this
@@ -290,7 +290,7 @@ final class HttpClient
 
             if ($status === 429) {
                 [$errorKey, $message] = $this->extractError($resp);
-                // #481: a pending-cap 429 means the caller already holds the maximum concurrent
+                // A pending-cap 429 means the caller already holds the maximum concurrent
                 // 2FA challenges — a retry can never clear that, so surface it immediately as an
                 // ApiError instead of the blind Retry-After backoff every other 429 gets.
                 if ($errorKey === 'twofa.pending_cap') {
@@ -342,7 +342,7 @@ final class HttpClient
         return $body;
     }
 
-    /** #590: the binary file fetch parses the structured shape itself, and must do it the way the
+    /** The binary file fetch parses the structured shape itself, and must do it the way the
      *  rest of this client does — an XML-configured client would otherwise silently lose XML support
      *  on exactly one endpoint. */
     public function wantsXml(): bool
@@ -374,7 +374,7 @@ final class HttpClient
         if (is_array($body) && !array_is_list($body)) {
             $errorKey = $body['error_key'] ?? null;
             $message = $body['error'] ?? ($body['message'] ?? null);
-            // #590: everything BESIDE the key and the message travels on as `details`, so a body that
+            // Everything BESIDE the key and the message travels on as `details`, so a body that
             // carries actionable data (a 410 file_expired's content_sha256 + expired_at) is readable
             // without a bespoke exception type per response.
             $details = $body;

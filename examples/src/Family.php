@@ -6,7 +6,7 @@ namespace Allus\Examples;
 
 /**
  * The contract every scenario-family handler implements so the shared {@see Server} can dispatch to it
- * generically by scenario id (spec §3 / #494). A family owns ONLY its scenario handlers — the SDK calls;
+ * generically by scenario id (spec §3). A family owns ONLY its scenario handlers — the SDK calls;
  * the HTTP routing, run store, config files, bundle fetch and port guard all live in the shared
  * scaffolding, never here.
  *

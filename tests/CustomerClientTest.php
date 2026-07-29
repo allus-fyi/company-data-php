@@ -14,7 +14,7 @@ use Allus\CompanyData\Tests\Support\Vector;
 use PHPUnit\Framework\TestCase;
 
 /**
- * CustomerClient (b2b, #168) — parse + method-shape + key-sourcing tests.
+ * CustomerClient (b2b) — parse + method-shape + key-sourcing tests.
  * Reuses the shared decryption vector's key as the customer ACCOUNT key.
  */
 final class CustomerClientTest extends TestCase

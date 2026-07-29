@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Errors;
 
 /**
- * A submitted value failed field-type validation (#302) before encryption.
+ * A submitted value failed field-type validation before encryption.
  *
  * Carries the offending field {@see $slug} and its {@see $fieldType} so the caller
  * can point at the bad answer without shipping malformed ciphertext.

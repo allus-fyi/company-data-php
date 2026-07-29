@@ -54,7 +54,7 @@ final class Handlers implements Family
     private const DEFAULT_AUTHORIZE_BASE = OAuthClient::DEFAULT_AUTHORIZE_URL; // https://web.allme.fyi/auth
 
     /**
-     * Refusal when the request carries no Host header, so the browser's origin is unknown (#574). There is
+     * Refusal when the request carries no Host header, so the browser's origin is unknown. There is
      * NO default host: substituting one (localhost) silently sends the round-trip to a DIFFERENT origin
      * than the browser is on — a different localStorage and a redirect URI the OAuth app never registered.
      */
@@ -71,11 +71,9 @@ final class Handlers implements Family
     private const POLL_TRANSPORT_TIMEOUT_S = 2.0;
 
     /**
-     * The "what just happened" trace (#578). Every entry is `<SDK method> — <what that call did in THIS
+     * The "what just happened" trace. Every entry is `<SDK method> — <what that call did in THIS
      * scenario>`, appended AT the call site, in the order the calls were made; an entry wrapped in
-     * parentheses is a step that is deliberately NOT an SDK call. The annotations are byte-identical in
-     * all six SDK examples — only the method reference is written in the language's own idiom — so one
-     * scenario teaches one thing whichever example a reader starts. Keep them in step when this handler
+     * parentheses is a step that is deliberately NOT an SDK call. Keep them in step when this handler
      * changes: the panel is headed "What just happened", and a list that no longer matches the code is
      * worse than a short one.
      */
@@ -131,7 +129,7 @@ final class Handlers implements Family
         if (!isset(self::SCENARIOS[$id]) || self::SCENARIOS[$id] !== 'runnable') {
             return Response::json(['error' => 'not_found'], 404);
         }
-        // The redirect URI is derived from THIS request's origin and from nothing else (#574). Refuse
+        // The redirect URI is derived from THIS request's origin and from nothing else. Refuse
         // rather than invent a host: the suite renders this sentence on Save.
         if (self::requestHost() === '') {
             return Response::json(['error' => self::NO_ORIGIN], 400);
@@ -240,7 +238,7 @@ final class Handlers implements Family
                 return Response::json(['runId' => $runId, 'action' => ['type' => 'detached', 'url' => $url]]);
 
             case 5: // OIDC login
-            case 6: // OIDC — continue on your phone (#431)
+            case 6: // OIDC — continue on your phone
                 $pkce = Pkce::generate();
                 $nonce = bin2hex(random_bytes(16));
                 $run['verifier'] = $pkce['verifier'];
@@ -331,7 +329,7 @@ final class Handlers implements Family
 
         try {
             if (($q['enrolled'] ?? '') === 'true') {
-                // Redirect-leg enrollment outcome (#436) — nothing to exchange; record it.
+                // Redirect-leg enrollment outcome — nothing to exchange; record it.
                 $run['status'] = 'done';
                 $run['result'] = ['enrolled' => true];
                 $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_ENROLLED_CALLBACK);
@@ -532,7 +530,7 @@ final class Handlers implements Family
 
     /**
      * Whether {@see oauthClientFor()} takes the named-constructor branch. The SAME predicate decides the
-     * client AND the trace entry, so the panel can never name a constructor that did not run (#578) — the
+     * client AND the trace entry, so the panel can never name a constructor that did not run — the
      * local-stack option really does build the client a different way.
      */
     private function usesDefaultAuthorizeBase(int $id): bool
@@ -541,7 +539,7 @@ final class Handlers implements Family
         return $base === '' || $base === OAuthClient::DEFAULT_AUTHORIZE_URL;
     }
 
-    /** The trace entry for the OAuth client {@see oauthClientFor()} just built (#578). */
+    /** The trace entry for the OAuth client {@see oauthClientFor()} just built. */
     private function idwBuildCall(int $id): string
     {
         return $this->usesDefaultAuthorizeBase($id) ? self::CALL_IDW_BUILD : self::CALL_IDW_BUILD_LOCAL;
@@ -562,7 +560,7 @@ final class Handlers implements Family
     }
 
     /**
-     * Build the OIDC client + authorization service (the #314 compliance surface) from the config file.
+     * Build the OIDC client + authorization service (the OIDC compliance surface) from the config file.
      *
      * @return array{0:\Facile\OpenIDClient\Client\ClientInterface,1:\Facile\OpenIDClient\Service\AuthorizationService}
      */
@@ -586,7 +584,7 @@ final class Handlers implements Family
     /**
      * The redirect URI recorded in the scenario's config file (used by the OIDC library) — the SAME value
      * the authorize URL carried, so the two legs of the exchange cannot diverge. An absent/empty record
-     * re-derives from THIS request's origin; it never substitutes a host (#574).
+     * re-derives from THIS request's origin; it never substitutes a host.
      */
     private function configRedirectUri(int $id): string
     {
@@ -604,7 +602,7 @@ final class Handlers implements Family
 
     /**
      * The registered redirect URI: http://{host}/callback, host = the origin the browser actually used.
-     * Never falls back to a hardcoded host (#574) — `127.0.0.1` and `localhost` are DIFFERENT origins for
+     * Never falls back to a hardcoded host — `127.0.0.1` and `localhost` are DIFFERENT origins for
      * redirect matching and for browser storage alike, so a substituted default drops the developer on an
      * origin whose localStorage never held the setup and whose URI the OAuth app never registered.
      */
@@ -631,7 +629,7 @@ final class Handlers implements Family
     }
 
     /**
-     * #498: a claim carries a mandatory, unique `name` — the key `values` and `attestations` come
+     * A claim carries a mandatory, unique `name` — the key `values` and `attestations` come
      * back under. The demo's config lists claim TYPES, so the type doubles as the name here; a real
      * integration usually names them for its own domain ("billing_email").
      *

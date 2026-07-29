@@ -184,7 +184,7 @@ final class HttpTest extends TestCase
 
     public function test429PendingCapSurfacesImmediatelyWithoutRetry(): void
     {
-        // #481: a twofa.pending_cap 429 can never be cleared by a retry — it must surface at once
+        // A twofa.pending_cap 429 can never be cleared by a retry — it must surface at once
         // as ApiError, NOT go through the Retry-After backoff (which every other 429 gets).
         $t = new FakeTransport();
         $t->postResponses = [FakeTransport::tokenOk()];

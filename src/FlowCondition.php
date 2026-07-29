@@ -61,7 +61,7 @@ final class FlowCondition
                 return self::inList($target, $val);
             case 'nin':
                 return !self::inList($target, $val);
-            // #102 substring ops (text): contains needs an answer (like in); not_contains is
+            // Substring ops (text): contains needs an answer (like in); not_contains is
             // true when unanswered (like nin). Case-sensitive; empty needle counts as contained.
             case 'contains':
                 return self::answered($val) && str_contains(self::str($val), self::str($target));
@@ -229,7 +229,7 @@ final class FlowCondition
         };
     }
 
-    // ── Flow constants (computed variables) — issue #79. Pure; extends the evaluator above. ──
+    // ── Flow constants (computed variables). Pure; extends the evaluator above. ──────────────
     // Reuses the shipped private helpers toNum / str (=stringOf) / evaluate (=evaluateCondition)
     // WITHOUT modifying them, so the 27-case condition vector stays byte-identical. A "constant" =
     // ['key','label','result_type','expr']. computeConstants materialises each constant's value

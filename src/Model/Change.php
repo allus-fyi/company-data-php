@@ -29,7 +29,7 @@ final class Change
         public readonly ?string $personId,
         /** The person's profile share code (every event; may be null). */
         public readonly ?string $shareCode = null,
-        /** The customer's TYPE: "person"|"company" (B2B, #163); null on older API. */
+        /** The customer's TYPE: "person"|"company" (B2B); null on older API. */
         public readonly ?string $customerType = null,
         public readonly ?string $slug = null,
         public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value = null,
@@ -52,7 +52,7 @@ final class Change
         public readonly ?string $cancelEffectiveDate = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
-        /** #344: set on key_rotated — SHA-256 fingerprint of the person's NEW public key. */
+        /** Set on key_rotated — SHA-256 fingerprint of the person's NEW public key. */
         public readonly ?string $publicKeySha256 = null,
         public readonly bool $verified = false,
         public readonly ?\DateTimeImmutable $at = null,
@@ -99,7 +99,7 @@ final class Change
             value: $value,
             live: $live,
             documentId: isset($obj['document_id']) ? (string) $obj['document_id'] : null,
-            // #436: 2fa_challenge_completed carries the outcome in `status` (approved|denied|revoked);
+            // 2fa_challenge_completed carries the outcome in `status` (approved|denied|revoked);
             // its challenge_id/completed_at stay in $raw. The poll is the record (spec §3).
             status: (($event === 'document_status_changed' || $event === '2fa_challenge_completed') && isset($obj['status'])) ? (string) $obj['status'] : null,
             action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,

@@ -9,7 +9,7 @@ use Allus\Examples\Flow\Handlers as FlowHandlers;
 use Allus\Examples\Identity\Handlers as IdentityHandlers;
 
 /**
- * The ONE example server (#494). Single class, single worker: it owns all the SHARED scaffolding — HTTP
+ * The ONE example server. Single class, single worker: it owns all the SHARED scaffolding — HTTP
  * dispatch, the aggregate GET /api/meta, the static-bundle serving, the JSON/text/redirect plumbing — and
  * routes every scenario request to its family's handler by the scenario id:
  *
@@ -33,7 +33,7 @@ final class Server
     /** @var array<string,Family> family key → handler (for run-dispatch by the run's recorded family) */
     private readonly array $families;
 
-    /** Whether this request already produced a response — read by the fatal-error shutdown guard (#583). */
+    /** Whether this request already produced a response — read by the fatal-error shutdown guard. */
     private bool $emitted = false;
 
     public function __construct(
@@ -55,10 +55,10 @@ final class Server
 
     public function handle(): void
     {
-        // Registered FIRST, and everything else is inside the try — request PREPROCESSING included
-        // (#583 review pass 1). Any unexpected Throwable or fatal there must meet the same envelope
+        // Registered FIRST, and everything else is inside the try — request PREPROCESSING included.
+        // Any unexpected Throwable or fatal there must meet the same envelope
         // guarantee; both guards previously sat below preprocessing, leaving that path unguarded.
-        $this->guardFatal(); // the half `catch (\Throwable)` cannot reach (#583)
+        $this->guardFatal(); // the half `catch (\Throwable)` cannot reach
 
         try {
             $this->rt->ensureDirs();
@@ -69,7 +69,7 @@ final class Server
 
             $this->route($method, $path);
         } catch (\Throwable $e) {
-            // The reason rides in `error` — the only key the suite renders (#583). An exception whose
+            // The reason rides in `error` — the only key the suite renders. An exception whose
             // message is empty would otherwise report nothing at all, so its class stands in.
             $this->emit(Response::failure($e->getMessage() !== '' ? $e->getMessage() : $e::class));
         }
@@ -77,7 +77,7 @@ final class Server
 
     /**
      * PHP's FATAL errors are not `\Throwable` — a class-compatibility failure raised while AUTOLOADING a
-     * dependency (the exact #583 defect: `facile-it/php-openid-client` probes `class_exists()` over every
+     * dependency (the exact defect: `facile-it/php-openid-client` probes `class_exists()` over every
      * JOSE algorithm, and `web-token/jwt-library`'s AES-key-wrap classes cannot be compiled unless
      * `spomky-labs/aes-key-wrap` is installed) unwinds straight past `catch (\Throwable)`. PHP then emits
      * a bare 500 with an EMPTY `text/html` body, so the suite has no `error` to render and falls back to
@@ -179,7 +179,7 @@ final class Server
 
     // ── GET /api/meta ────────────────────────────────────────────────────────
 
-    /** Aggregate ALL scenarios of all three families (spec §3 / #494), at contractVersion 3. */
+    /** Aggregate ALL scenarios of all three families (spec §3), at contractVersion 3. */
     private function meta(): Response
     {
         $scenarios = [];

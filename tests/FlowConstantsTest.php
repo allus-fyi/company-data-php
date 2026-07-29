@@ -8,9 +8,9 @@ use Allus\CompanyData\FlowCondition;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Flow-constants (computed variables, issue #79) parity — every case in the shared
- * contract-flow-constants-vector.json must pass. The same vector pins the JS reference and the
- * python/ts/go/csharp/java/iOS/Android ports. computeConstants() extends the frozen
+ * Flow-constants (computed variables) parity — every case in the shared
+ * contract-flow-constants-vector.json must pass, keeping this port aligned with every other
+ * implementation of the same contract. computeConstants() extends the frozen
  * FlowCondition evaluator (its 27-case condition vector is untouched).
  */
 final class FlowConstantsTest extends TestCase

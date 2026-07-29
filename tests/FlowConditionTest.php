@@ -8,8 +8,8 @@ use Allus\CompanyData\FlowCondition;
 use PHPUnit\Framework\TestCase;
 
 /**
- * FlowConditionEvaluator parity — every case in the shared vector must pass. The same vector pins
- * the PHP reference + the python/ts/go/csharp/java/iOS/Android ports.
+ * FlowConditionEvaluator parity — every case in the shared vector must pass, keeping this port
+ * aligned with every other implementation of the same contract.
  */
 final class FlowConditionTest extends TestCase
 {

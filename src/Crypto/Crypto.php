@@ -12,7 +12,7 @@ use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
 use phpseclib3\Crypt\PublicKeyLoader;
 
 /**
- * Decryption core — byte-identical across all six SDKs.
+ * Decryption core.
  *
  * Every person value arrives as a ciphertext wrapper, encrypted **for the
  * service public key**; the SDK decrypts with the service private key. The
@@ -288,7 +288,7 @@ final class Crypto
     }
 
     /**
-     * #311 verified fields: true iff sha256(salt ‖ plaintext) === expectedHash (hex). Consumers
+     * Verified fields: true iff sha256(salt ‖ plaintext) === expectedHash (hex). Consumers
      * recompute this from the plaintext they just decrypted and trust the verified flag only on a match.
      */
     public static function hashMatches(string $salt, string $expectedHash, string $plaintext): bool

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * One-command launcher for the whole example test suite (#494 — one server, all three scenario families).
+ * One-command launcher for the whole example test suite — one server, all three scenario families.
  *
  * Steps:
  *   1. wipe .runtime/ (fresh state each boot)
@@ -14,7 +14,7 @@ declare(strict_types=1);
  *   5. refuse a busy port with a clear message
  *   6. exec `php -S 0.0.0.0:${PORT:-8091} router.php` — SINGLE WORKER (PHP_CLI_SERVER_WORKERS unset),
  *      bound to ALL interfaces so a phone on the same network can reach it, and printing every URL it
- *      is reachable on (#553).
+ *      is reachable on.
  */
 
 const CONTRACT_VERSION = 3; // must equal Server::CONTRACT_VERSION
@@ -80,7 +80,7 @@ if ($sock === false) {
 }
 fclose($sock);
 
-// 6. serve — SINGLE WORKER (do NOT set PHP_CLI_SERVER_WORKERS), on ALL interfaces (#553)
+// 6. serve — SINGLE WORKER (do NOT set PHP_CLI_SERVER_WORKERS), on ALL interfaces
 printReachableUrls($port);
 $cmd = escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg("0.0.0.0:{$port}") . ' ' . escapeshellarg('router.php');
 passthru($cmd, $rc);
@@ -89,7 +89,7 @@ exit($rc);
 // ── helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Announce every URL the server is reachable on (#553).
+ * Announce every URL the server is reachable on.
  *
  * The server binds 0.0.0.0, so a phone on the same network can reach it — but only if the person
  * holding the phone knows which address to type. Print the loopback URL AND every non-loopback IPv4

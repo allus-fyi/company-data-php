@@ -106,7 +106,7 @@ final class Client
      * @var array<string,RSAPublicKey>
      */
     /**
-     * #344 review pass 3 — why this SDK has NO generation counter, unlike Go/Java/C#/TS/Python.
+     * Why this SDK has NO generation counter for the public-key cache.
      *
      * The lost-invalidation race needs a window between the cache check and the store in which
      * `invalidatePublicKey` can run. PHP's request-scoped, single-threaded execution model has no
@@ -115,7 +115,7 @@ final class Client
      *
      * This exemption is a property of the RUNTIME, not of this code. If this client is ever
      * wrapped in an async runtime (Swoole, Fibers, ReactPHP) or shared across threads, it inherits
-     * the race and MUST gain the same generation counter the other five SDKs carry.
+     * the race and MUST gain a generation counter.
      */
     private array $pubKeyCache = [];
 
@@ -192,7 +192,7 @@ final class Client
     /**
      * Fetch a company-facing binary file endpoint and classify its response.
      *
-     * #590 — the endpoint has TWO 200 shapes and which one arrives is not the company's to predict:
+     * The endpoint has TWO 200 shapes and which one arrives is not the company's to predict:
      * a person whose source field is PRIVATE yields {@code application/json}
      * {@code {"encrypted":true,"value":<wrapper>}}, a person whose field is not yields the file's own
      * Content-Type and the bytes themselves. The decision is made on {@code Content-Type} and never by
@@ -247,11 +247,11 @@ final class Client
         return $this->typeBySlug[$slug] ?? null;
     }
 
-    // ── 2FA-by-allme (#436) ──────────────────────────────────────────────────────
+    // ── 2FA-by-allme ───────────────────────────────────────────────────────────────
 
     private ?TwoFactorClient $twoFactorClient = null;
 
-    /** #436 2FA-by-allme — the relying-party challenge API (twoFactor()->challenge / ->result). */
+    /** 2FA-by-allme — the relying-party challenge API (twoFactor()->challenge / ->result). */
     public function twoFactor(): TwoFactorClient
     {
         return $this->twoFactorClient ??= new TwoFactorClient($this->http, $this->sleep);
@@ -449,7 +449,7 @@ final class Client
     }
 
     /**
-     * #344 — drop a person's cached public key by share code.
+     * Drop a person's cached public key by share code.
      *
      * The pull feed calls this for you (see {@see invalidateOnKeyRotation}). Call it yourself if
      * you consume changes over a **webhook**: {@see Webhooks::verify()} is static and has no
@@ -462,7 +462,7 @@ final class Client
     }
 
     /**
-     * #344 — drop a person's cached public key when the feed reports they rotated it.
+     * Drop a person's cached public key when the feed reports they rotated it.
      *
      * A public key is immutable, so caching one is safe — until the person replaces it. Persons
      * learn about a rotation from a silent push; a SERVICE receives no pushes at all, so before
@@ -479,7 +479,7 @@ final class Client
      */
     private function invalidateOnKeyRotation(array $event): void
     {
-        // #344: the pull feed names it `event`; a raw webhook body names it `action` (and on
+        // The pull feed names it `event`; a raw webhook body names it `action` (and on
         // document rows `action` carries signed|accepted|cancelled instead) — so match either key.
         if (($event['event'] ?? null) !== 'key_rotated' && ($event['action'] ?? null) !== 'key_rotated') {
             return;
@@ -871,7 +871,7 @@ final class Client
     }
 
     /**
-     * #491 gap 2: download a document's file BYTES. {@code document()} returns metadata only. This GETs
+     * Download a document's file BYTES. {@code document()} returns metadata only. This GETs
      * {@code /documents/{id}/file} and branches on the document's storage mode (server contract):
      *  - a BROADCAST (non-private) document is stored plaintext and served as RAW bytes → returned as-is;
      *  - a PER-PERSON / private document is encrypted to the RECIPIENT's key and served as
@@ -1013,7 +1013,7 @@ final class Client
     }
 
     /**
-     * #491 gap 1: a completed run's DECRYPTED answers as {@code [slug => plaintext]}. Accepts a
+     * A completed run's DECRYPTED answers as {@code [slug => plaintext]}. Accepts a
      * loaded {@see FlowRun} or a run id (fetched via {@see flowRun}). Reads the company's service-key
      * answer copies — the intended top-level accessor for a finished run's answers (the private
      * {@see decryptRunAnswers} it wraps is otherwise reachable only inside {@see processFlowRun},
@@ -1028,7 +1028,7 @@ final class Client
     }
 
     /**
-     * #491 gap 2: download the company's OWN copy of a run's generated flow contract — the PLAINTEXT
+     * Download the company's OWN copy of a run's generated flow contract — the PLAINTEXT
      * file bytes. GETs {@code /flow-runs/{runId}/document/file}, which serves the company-party copy
      * encrypted to the SERVICE key (unlike {@see documentFile}'s recipient-targeted copy), so the same
      * {@see BinaryHandle} the slot-file download uses decrypts it → the {@code {"file":"data:…;base64,…"}}
@@ -1044,7 +1044,7 @@ final class Client
     }
 
     /**
-     * #491 gap 3: this client's OWN identity — {@code ['company_user_id' => ..., 'service_id' => ...]}
+     * This client's OWN identity — {@code ['company_user_id' => ..., 'service_id' => ...]}
      * from {@code GET /api/company-data/whoami}. The COMPANY party of a {@see triggerFlowRun} binding
      * must bind to {@code company_user_id} (the person party's user_id comes from the connection), so
      * without this the company-side binding was unconstructible through the SDK.
@@ -1147,7 +1147,7 @@ final class Client
         $answersOut = [];
         foreach ($fill as $slug => $val) {
             $plain = is_string($val) ? $val : json_encode($val, JSON_THROW_ON_ERROR);
-            // #302: validate the plaintext against the field's declared type (resolved from the
+            // Validate the plaintext against the field's declared type (resolved from the
             // pinned flow definition) before it is encrypted. A slug with no field element in the
             // graph resolves to null → skipped (do not invent a type).
             $ftype = self::flowFieldType($run->definition, (string) $slug);
@@ -1414,7 +1414,7 @@ final class Client
     }
 
     /**
-     * Resolve a fill slug to its {@code field_type} from the pinned flow graph (#302). Scans every
+     * Resolve a fill slug to its {@code field_type} from the pinned flow graph. Scans every
      * node's {@code elements} for a {@code kind='field'} element with a matching {@code slug}. Returns
      * null when the slug has no field element (skip validation — never invent a type).
      *

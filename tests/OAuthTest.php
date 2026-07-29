@@ -12,7 +12,7 @@ use Allus\CompanyData\OAuthClient;
 use Allus\CompanyData\Tests\Support\FakeTransport;
 use PHPUnit\Framework\TestCase;
 
-/** "Sign in with allme" RP OAuth client tests (#195). Ports test_oauth.py. */
+/** "Sign in with allme" RP OAuth client tests. Ports test_oauth.py. */
 final class OAuthTest extends TestCase
 {
     private const VECTOR = __DIR__ . '/../testdata/decryption-vector.json';
@@ -70,7 +70,7 @@ final class OAuthTest extends TestCase
     public function testAuthorizeUrlClaimValidation(): void
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
-        // #498: every claim carries a mandatory `name` — the identity everything downstream is keyed by.
+        // Every claim carries a mandatory `name` — the identity everything downstream is keyed by.
         $claims = [
             new Claim('email', 'email', suggest: 'email_personal'),
             new Claim('avatar', 'photo'),
@@ -85,7 +85,7 @@ final class OAuthTest extends TestCase
         $this->assertTrue($parsed[1]['required']);
     }
 
-    /** #498 §2: a nameless claim, and two sharing a name, are refused at the call that made them. */
+    /** §2: a nameless claim, and two sharing a name, are refused at the call that made them. */
     public function testAuthorizeUrlClaimNameRequired(): void
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
@@ -100,7 +100,7 @@ final class OAuthTest extends TestCase
         $c->authorizeUrl('one_time', claims: [new Claim('email', 'email'), new Claim('email', 'text')]);
     }
 
-    /** #498 §3: `verified` travels on the wire, so an RP can demand a #311-attested answer. */
+    /** §3: `verified` travels on the wire, so an RP can demand an attested answer. */
     public function testAuthorizeUrlClaimVerified(): void
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
@@ -138,7 +138,7 @@ final class OAuthTest extends TestCase
         $this->assertSame('authorization_code', $t->posts[0]['form']['grant_type']);
         $this->assertSame('V', $t->posts[0]['form']['code_verifier']);
         $info = $c->userinfo('AT');
-        // #498 §5: `sub` IS the share code (byte-identical to the id_token's); display_name is gone.
+        // §5: `sub` IS the share code (byte-identical to the id_token's); display_name is gone.
         $this->assertSame('AB12CD', $info['sub']);
         $this->assertSame($info['share_code'], $info['sub']);
         $this->assertArrayNotHasKey('display_name', $info);
@@ -161,7 +161,7 @@ final class OAuthTest extends TestCase
         $this->assertTrue($res['two_factor']);
         $this->assertSame('AB12CD', $res['user']['sub']);
         $this->assertSame($vec['text']['plaintext'], $res['values']['email_personal']);
-        // #498 §3.1a: no `values_attestation` on the wire → "not attested", never "wrong".
+        // §3.1a: no `values_attestation` on the wire → "not attested", never "wrong".
         $this->assertSame([], $res['attestations']);
     }
 
@@ -190,7 +190,7 @@ final class OAuthTest extends TestCase
         }
     }
 
-    // ── #481: 2fa_enroll mode + detached enrollment poll delivery ──────────────
+    // ── 2fa_enroll mode + detached enrollment poll delivery ────────────────────
 
     public function testAuthorizeUrlAccepts2faEnrollMode(): void
     {
@@ -202,7 +202,7 @@ final class OAuthTest extends TestCase
 
     public function testPollResultPendingThenEnrolled(): void
     {
-        // #481: a detached 2fa_enroll delivers {enrolled: true, state}, NOT a code. pollResult must
+        // A detached 2fa_enroll delivers {enrolled: true, state}, NOT a code. pollResult must
         // return on the `enrolled` sentinel — otherwise it consumes the one-shot result and times out.
         $t = new FakeTransport();
         $t->postResponses[] = FakeTransport::text(202, '');

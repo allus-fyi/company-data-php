@@ -49,7 +49,7 @@ final class Value
     }
 
     /**
-     * #311: recompute the verified flag from the just-decrypted plaintext (email string only).
+     * Recompute the verified flag from the just-decrypted plaintext (email string only).
      *
      * @param array<string,mixed> $obj
      */

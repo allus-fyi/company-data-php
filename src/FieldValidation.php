@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Allus\CompanyData;
 
 /**
- * Shared field-type value validation (#302).
+ * Shared field-type value validation.
  *
- * Pure + i18n-free port of the web reference {@code frontend/src/fieldValidation.js},
- * kept byte-aligned across web / allus / iOS / Android / the 6 SDKs by
+ * Pure + i18n-free port of the canonical field-validation reference, kept byte-aligned
+ * with every other implementation of the same contract by
  * {@code testdata/contract-field-validation-vector.json}. Spec:
  * {@code docs/superpowers/specs/2026-07-15-field-type-validation-design.html}.
  *
@@ -107,13 +107,13 @@ final class FieldValidation
         return self::isFieldValueValid($type, $value) ? null : ($type ?? '');
     }
 
-    /** True if {@code $code} is an assigned ISO 3166-1 alpha-2 country code (#303). */
+    /** True if {@code $code} is an assigned ISO 3166-1 alpha-2 country code. */
     public static function isValidCountryCode(?string $code): bool
     {
         return $code !== null && in_array($code, CountryData::COUNTRY_CODES, true);
     }
 
-    /** The ITU E.164 dial code (digits only, no {@code +}) for a country code, or null (#303). */
+    /** The ITU E.164 dial code (digits only, no {@code +}) for a country code, or null. */
     public static function dialCodeFor(?string $code): ?string
     {
         return $code === null ? null : (CountryData::DIAL_CODES[$code] ?? null);

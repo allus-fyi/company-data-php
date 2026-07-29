@@ -285,7 +285,7 @@ final class ModelsTest extends TestCase
 
     public function testRequestFieldIncludesAudience(): void
     {
-        // B2B (#163): a request row carries its audience; absent -> null.
+        // B2B: a request row carries its audience; absent -> null.
         $body = ['request_fields' => [
             ['slug' => 'billing', 'label' => 'Billing', 'type' => 'email', 'audience' => 'company'],
             ['slug' => 'ref', 'label' => 'Ref', 'type' => 'text'],
@@ -297,7 +297,7 @@ final class ModelsTest extends TestCase
 
     public function testChangeIncludesCustomerType(): void
     {
-        // B2B (#163): a change event carries customer_type; absent -> null.
+        // B2B: a change event carries customer_type; absent -> null.
         $body = ['changes' => [
             ['id' => 'chg-1', 'event' => 'connection_created',
              'person_user_id' => 'co-1', 'customer_type' => 'company', 'at' => '2026-07-07T12:00:00Z'],
@@ -311,7 +311,7 @@ final class ModelsTest extends TestCase
 
     public function testConnectionIncludesCustomerTypeAndShareCode(): void
     {
-        // B2B (#163): a connection carries customer_type + share_code (both nullable).
+        // B2B: a connection carries customer_type + share_code (both nullable).
         $obj = ['connection_id' => 'c-1', 'user_id' => 'co-9',
                 'customer_type' => 'company', 'share_code' => 'PARTNER', 'values' => []];
         $conn = Connection::fromApi($obj, fn (string $s): ?string => null, $this->decryptValue());

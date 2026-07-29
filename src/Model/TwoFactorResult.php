@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Model;
 
 /**
- * #436 2FA-by-allme — the outcome of TwoFactorClient::result() (spec §3). The poll is the record: the
+ * 2FA-by-allme — the outcome of TwoFactorClient::result() (spec §3). The poll is the record: the
  * first read of a terminal state delivers it and burns it (a later read is "gone").
  */
 final class TwoFactorResult

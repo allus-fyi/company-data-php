@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Model;
 
 /**
- * #436 2FA-by-allme — a login-approval challenge returned by TwoFactorClient::challenge() (spec §3).
+ * 2FA-by-allme — a login-approval challenge returned by TwoFactorClient::challenge() (spec §3).
  */
 final class TwoFactorChallenge
 {

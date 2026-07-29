@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 /**
- * Router for `php -S 0.0.0.0:${PORT:-8091} router.php` (#494 — one server for all three families;
- * #553 — bound to all interfaces so a phone on the same network can reach it).
+ * Router for `php -S 0.0.0.0:${PORT:-8091} router.php` — one server for all three families,
+ * bound to all interfaces so a phone on the same network can reach it.
  *
  * SINGLE WORKER — PHP_CLI_SERVER_WORKERS is deliberately NOT set, so requests serialize and there is no
  * cross-request concurrency to guard. Every request (static bundle OR API OR the public POST /webhook OR
@@ -36,7 +36,7 @@ if (is_file($sdkComposer)) {
 }
 
 $rt = new Runtime($base);
-// #478: the verified bundle lives under the tag-specific cache dir .frontend/<tag>/ (spec §2), so a pin
+// The verified bundle lives under the tag-specific cache dir .frontend/<tag>/ (spec §2), so a pin
 // bump serves the new release rather than a stale extraction. Resolve the tag from frontend.lock.
 $lock = json_decode((string) @file_get_contents($base . '/frontend.lock'), true);
 $frontendDir = $base . '/.frontend'
