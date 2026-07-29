@@ -121,7 +121,9 @@ port if you set `PORT`.
 
 For the **flow** scenario, import one of the two flow packages in `fixtures/` into
 the portal (service settings → Flows → Import) and **publish** it, then enter the
-published flow id + the target connection id in the browser. The person's turn — and
+flow's **name** + the **published version** the portal shows next to it, and the
+demo person's own **share code**, in the browser — the backend resolves both to
+the ids the SDK needs. The person's turn — and
 the contract fixture's signature — are completed on a phone with the allme app,
 signed in as the connected demo person.
 
@@ -204,7 +206,9 @@ the link-click path for that scenario locally.
 | **`server_error — PHP fatal error: … class AESKW\… is not available`** on an OIDC scenario | `spomky-labs/aes-key-wrap` is missing from `vendor/`. It is a **required** dependency of this suite (the OIDC library probes every JOSE algorithm on client build, and the key-wrap classes declare return types on `AESKW\*`). `composer install` restores it. |
 | **Webhook deliveries never arrive** | Your `localhost` isn't publicly reachable — open the `cloudflared` tunnel above and register the printed URL with `/webhook` appended. The change-feed fallback still shows events meanwhile. |
 | **A per-person / contract document errors** | Those types target a connected person — set the **target person share code** in the documents scenario's setup, then re-run. Broadcast documents need no target. |
-| **`start_failed` naming a missing connection / person** (flow) | The connection id is wrong or the person isn't connected to the service. The portal shows no per-service list of connected people — get the id by running the **Read connected people** scenario and opening its **Raw** view. |
+| **`start_failed` naming a missing flow** (flow) | The flow name or published version doesn't match a flow on this service — check the spelling against the portal's flow list and the "Published vN" it shows next to it. |
+| **`start_failed` naming more than one matching flow** (flow) | Two flows on this service share the same name AND published version — rename one of them (the flow builder's name field) so the pair is unique, then try again. |
+| **`connection_error` naming a missing connection** (flow) | The share code is wrong, or the person isn't connected to this service yet. |
 
 ---
 

@@ -8,6 +8,7 @@ use Allus\CompanyData\Client;
 use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Errors\ValidationError;
+use Allus\CompanyData\Model\Connection;
 use Allus\CompanyData\Model\FlowRun;
 use Allus\Examples\Family;
 use Allus\Examples\Response;
@@ -54,8 +55,9 @@ final class Handlers implements Family
      * this handler changes.
      */
     private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
+    private const CALL_REQUEST_FIELDS = 'Client::requestFields — resolves the flow name + published version (the only handle the portal ever shows for it) to its flow id';
     private const CALL_IDENTITY = 'Client::identity — GET /api/company-data/whoami: this service\'s own company_user_id, which the COMPANY party binds to';
-    private const CALL_CONNECTION = 'Client::connection — reads the configured connection; the connected person\'s id on it is what the CUSTOMER party binds to';
+    private const CALL_CONNECTIONS = 'Client::connections — resolves the person\'s own share code to the connection whose id the CUSTOMER party binds to';
     private const CALL_TRIGGER = 'Client::triggerFlowRun — starts a run of the published flow for that connection, pinning the flow\'s latest published version';
     private const CALL_FLOW_RUN = 'Client::flowRun — re-read on every poll to see whose turn the run is on';
     private const CALL_PROCESS = 'Client::processFlowRun — drives ONE company step: decrypts the answers so far, fills the node, type-checks the values, encrypts a copy per party, submits — and generates the document when the submit lands on a document-mode leaf';
@@ -76,9 +78,11 @@ final class Handlers implements Family
 
     /**
      * Write the browser's setup values to a canonical SDK config FILE (service role — spec §5). The
-     * service PEM is written to config/keys/ and referenced by path; the demo-only run parameters
-     * (published flow id, connection id, fixture choice) go to the meta sidecar so the config file stays a
-     * pure SDK config the run executes off.
+     * service PEM is written to config/keys/ and referenced by path; the demo-only run parameters (flow
+     * name + published version, the person's share code, fixture choice) go to the meta sidecar so the
+     * config file stays a pure SDK config the run executes off. Neither the flow id nor the connection id
+     * is ever collected here — {@see start()} resolves both via the SDK instead of taking either as a
+     * raw database id.
      *
      * @param array<string,mixed> $in
      */
@@ -103,8 +107,9 @@ final class Handlers implements Family
 
         // Demo-only run parameters (NOT SDK Config fields) → meta sidecar.
         $this->rt->writeConfigMeta(self::SCENARIO, [
-            'flow_id' => (string) ($in['flowId'] ?? ''),
-            'connection_id' => (string) ($in['connectionId'] ?? ''),
+            'flow_name' => (string) ($in['flowName'] ?? ''),
+            'flow_version' => (string) ($in['flowVersion'] ?? ''),
+            'share_code' => (string) ($in['shareCode'] ?? ''),
             'fixture' => (string) ($in['fixture'] ?? ''),
         ]);
 
@@ -114,10 +119,12 @@ final class Handlers implements Family
     // ── POST /api/scenarios/{id}/start ─────────────────────────────────────────
 
     /**
-     * Trigger the flow run. Build the service Client from the persisted config file, construct the
-     * bindings via the intended SDK surface (company → identity().company_user_id; customer →
-     * Connection::$personId), call triggerFlowRun, and store the returned platform flowRunId in the demo
-     * run file. Returns {runId, action:{"type":"none"}} — the drive happens on the GET /api/runs poll.
+     * Trigger the flow run. Build the service Client from the persisted config file, resolve the flow
+     * name + published version and the person's share code to the ids {@see Client::triggerFlowRun}
+     * needs (neither is ever collected as a raw id — spec amendment), construct the bindings via the
+     * intended SDK surface (company → identity().company_user_id; customer → Connection::$personId), call
+     * triggerFlowRun, and store the returned platform flowRunId in the demo run file. Returns
+     * {runId, action:{"type":"none"}} — the drive happens on the GET /api/runs poll.
      */
     public function start(string $id): Response
     {
@@ -129,16 +136,42 @@ final class Handlers implements Family
             return Response::json(['error' => 'not_configured'], 409);
         }
         $meta = $this->rt->readConfigMeta(self::SCENARIO);
-        $flowId = (string) ($meta['flow_id'] ?? '');
-        $connectionId = (string) ($meta['connection_id'] ?? '');
-        if ($flowId === '' || $connectionId === '') {
-            return Response::json(['error' => 'not_configured', 'message' => 'flow id and connection id are required'], 409);
+        $flowName = trim((string) ($meta['flow_name'] ?? ''));
+        $flowVersionRaw = trim((string) ($meta['flow_version'] ?? ''));
+        $shareCode = trim((string) ($meta['share_code'] ?? ''));
+        if ($flowName === '' || $flowVersionRaw === '' || $shareCode === '') {
+            return Response::json(['error' => 'not_configured', 'message' => 'flow name, published version and share code are required'], 409);
         }
+        if (!ctype_digit($flowVersionRaw)) {
+            return Response::failure("published version \"{$flowVersionRaw}\" is not a number", 'start_failed', 400);
+        }
+        $flowVersion = (int) $flowVersionRaw;
 
         $calls = [];
         try {
             $calls[] = self::CALL_SERVICE_BUILD;
             $client = $this->serviceClient();
+
+            // Resolve the flow name + published version to its flow id. The pair is not guaranteed
+            // unique (nothing enforces it), so this can return zero, one, or more than one candidate —
+            // only exactly one is safe to proceed on; anything else refuses rather than guess.
+            $calls[] = self::CALL_REQUEST_FIELDS;
+            $candidates = self::resolveFlowIdCandidates($client, $flowName, $flowVersion);
+            if (count($candidates) === 0) {
+                return Response::failure(
+                    "no published flow named \"{$flowName}\" at version {$flowVersion} — check the name and the \"Published vN\" the portal shows next to it",
+                    'start_failed',
+                    404,
+                );
+            }
+            if (count($candidates) > 1) {
+                return Response::failure(
+                    "more than one flow matches the name \"{$flowName}\" at version {$flowVersion} — rename one of them in the portal (the flow builder's name field, next to \"Published vN\") so the pair is unique, then try again",
+                    'start_failed',
+                    409,
+                );
+            }
+            $flowId = $candidates[0];
 
             // The COMPANY party binds to this service's own company_user_id (identity()).
             $calls[] = self::CALL_IDENTITY;
@@ -148,13 +181,22 @@ final class Handlers implements Family
                 return Response::failure('identity() returned no company_user_id', 'identity_error', 502);
             }
 
-            // The CUSTOMER party binds to the connected person's public personId (no public user_id).
-            $calls[] = self::CALL_CONNECTION;
-            $connection = $client->connection($connectionId);
-            $personId = $connection->personId;
-            if ($personId === null || $personId === '') {
+            // Resolve the person's own share code to their connection — the CUSTOMER party binds to the
+            // connected person's public personId (no public user_id).
+            $calls[] = self::CALL_CONNECTIONS;
+            $connection = self::resolveConnection($client, $shareCode);
+            if ($connection === null) {
                 return Response::failure(
-                    "connection {$connectionId} has no personId (not found or not connected)",
+                    "no connection found for share code \"{$shareCode}\" — is the person connected to this service?",
+                    'connection_error',
+                    404,
+                );
+            }
+            $connectionId = (string) ($connection->id ?? '');
+            $personId = $connection->personId;
+            if ($connectionId === '' || $personId === null || $personId === '') {
+                return Response::failure(
+                    "connection for share code \"{$shareCode}\" has no id/personId (not found or not connected)",
                     'connection_error',
                     502,
                 );
@@ -428,6 +470,51 @@ final class Handlers implements Family
             $out['error'] = $run['error'];
         }
         return $out;
+    }
+
+    // ── resolving a name + code the developer can obtain into the ids the SDK needs ─
+
+    /**
+     * Resolve a flow's name + published version to its CANDIDATE flow ids. flow_id/flow_name/flow_version
+     * ride the additive `.raw` dict on the flow-tagged rows requestFields() returns — they are not typed
+     * properties of {@see \Allus\CompanyData\Model\RequestField}. Returns every DISTINCT flow id whose
+     * tagged fields match both name and version, deduplicated — nothing here guarantees the pair is
+     * unique, so the caller decides what to do with zero, one, or more than one candidate.
+     *
+     * @return list<string> distinct matching flow ids, in first-seen order
+     */
+    private static function resolveFlowIdCandidates(Client $client, string $flowName, int $flowVersion): array
+    {
+        $seen = [];
+        foreach ($client->requestFields() as $field) {
+            $raw = $field->raw;
+            $name = $raw['flow_name'] ?? null;
+            $version = $raw['flow_version'] ?? null;
+            if ($name !== $flowName || $version === null || (int) $version !== $flowVersion) {
+                continue;
+            }
+            $flowId = (string) ($raw['flow_id'] ?? '');
+            if ($flowId !== '' && !isset($seen[$flowId])) {
+                $seen[$flowId] = true;
+            }
+        }
+        return array_keys($seen);
+    }
+
+    /**
+     * Resolve a person's own share code to their {@see Connection}. connections() auto-pages the whole
+     * service — a demo has too few connections for that to matter, but it is the same call a real
+     * integrator would make to look a person up by the one identifier they can read off their own app.
+     */
+    private static function resolveConnection(Client $client, string $shareCode): ?Connection
+    {
+        $wanted = strtoupper($shareCode);
+        foreach ($client->connections() as $connection) {
+            if ($connection->shareCode !== null && strtoupper($connection->shareCode) === $wanted) {
+                return $connection;
+            }
+        }
+        return null;
     }
 
     // ── SDK client builder — built from the persisted config FILE (amendment) ──
