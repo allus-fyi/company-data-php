@@ -47,6 +47,15 @@ final class Handlers implements Family
     /** Scenarios that also read live values through the service data {@see Client} (service-role keys). */
     private const SERVICE_SCENARIOS = [4, 8];
 
+    /**
+     * Scenarios whose {@see OAuthClient::completeSignIn()} response can carry claim values (userinfo
+     * `values` non-empty) and therefore need the OAuth app private key configured to decrypt them: mode
+     * one_time and mode connect, both delivered as app-key ciphertext through userinfo. Mode signin
+     * (scenarios 1, 2) never carries values; scenario 8 never calls this leg at all; scenarios 5/6 run the
+     * third-party OIDC library instead of this SDK's decrypt path.
+     */
+    private const CLAIM_VALUE_SCENARIOS = [3, 4];
+
     /** Scenarios that build an OAuth consent URL via {@see OAuthClient} (need the authorize base). */
     private const OAUTH_URL_SCENARIOS = [1, 2, 3, 4, 8];
 
@@ -89,7 +98,7 @@ final class Handlers implements Family
     private const CALL_POLL_ENROLL = 'OAuthClient::pollResult — polls POST /oauth2/result until the phone delivers {enrolled: true} (one 2s-bounded call per browser poll)';
     private const CALL_COMPLETE_SIGNIN = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, then reads GET /api/oauth/userinfo; mode signin returns the identity only, no claim values';
     private const CALL_COMPLETE_ONE_TIME = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, reads GET /api/oauth/userinfo, and decrypts every claim value with the OAuth app private key';
-    private const CALL_COMPLETE_CONNECT = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, then reads GET /api/oauth/userinfo; connect delivers no values here, the live ones come from the data client below';
+    private const CALL_COMPLETE_CONNECT = 'OAuthClient::completeSignIn — exchanges the code + PKCE verifier at POST /oauth2/token, reads GET /api/oauth/userinfo, and decrypts the consented claim values with the OAuth app private key; the connection\'s live values still come separately from the data client below';
     private const CALL_ENROLLED_CALLBACK = '(callback ?enrolled=true) — the redirect-leg enrollment outcome; there is nothing to exchange, so no further SDK call';
     private const CALL_SERVICE_BUILD = 'Client::fromConfig — builds the SERVICE-role data client from the saved config file: client credentials plus the service private key, decrypted with its passphrase';
     private const CALL_CONNECTIONS_LIVE = 'Client::connections — pages GET /api/company-data/connections and decrypts each person\'s values with the service key; the run keeps the one whose share code just signed in';
@@ -146,8 +155,9 @@ final class Handlers implements Family
             $cfg['oauth_client_secret'] = $secret;
         }
 
-        // Scenario 3 (one_time): the OAuth app private key decrypts the claim values (config-only keys).
-        if ($id === 3) {
+        // Any scenario whose run can carry claim values (self::CLAIM_VALUE_SCENARIOS) needs the OAuth
+        // app private key to decrypt them (config-only keys).
+        if (in_array($id, self::CLAIM_VALUE_SCENARIOS, true)) {
             $pem = (string) ($in['oauthPrivateKeyPem'] ?? '');
             if ($pem !== '') {
                 $cfg['oauth_private_key'] = $this->rt->materializeConfigKey($pem);
