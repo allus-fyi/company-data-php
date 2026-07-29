@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Allus\CompanyData\Tests;
 
+use Allus\CompanyData\Crypto\BinaryFetchResult;
 use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Model\Change;
@@ -142,9 +143,9 @@ final class ModelsTest extends TestCase
     public function testBinaryHandleLazyFetchAndDecrypt(): void
     {
         $captured = [];
-        $fetch = function (string $url) use (&$captured): array {
+        $fetch = function (string $url) use (&$captured): BinaryFetchResult {
             $captured['url'] = $url;
-            return self::$vector['binary']['wrapper'];
+            return new BinaryFetchResult(encrypted: true, wrapper: self::$vector['binary']['wrapper']);
         };
         $detail = [
             'connection_id' => 'csc-1',
@@ -224,7 +225,10 @@ final class ModelsTest extends TestCase
             'value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file',
             'live' => true, 'at' => '2026-06-17T12:00:00Z',
         ]]];
-        $fetch = fn (string $u): array => self::$vector['binary']['wrapper'];
+        $fetch = fn (string $u): BinaryFetchResult => new BinaryFetchResult(
+            encrypted: true,
+            wrapper: self::$vector['binary']['wrapper'],
+        );
         $changes = Change::listFromApi($body, fn (string $s): ?string => 'photo', $this->decryptValue(), $fetch);
         $chg = $changes[0];
         self::assertInstanceOf(BinaryHandle::class, $chg->value);

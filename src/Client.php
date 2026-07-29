@@ -10,6 +10,7 @@ use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Errors\DecryptError;
 use Allus\CompanyData\Errors\RateLimitError;
 use Allus\CompanyData\Errors\ValidationError;
+use Allus\CompanyData\Crypto\BinaryFetchResult;
 use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
@@ -189,22 +190,52 @@ final class Client
     }
 
     /**
-     * Fetch a slot file endpoint and unwrap its
-     * {@code {"encrypted":true,"value":...}} envelope → the inner
-     * {@code {"_enc":1,...}} wrapper.
+     * Fetch a company-facing binary file endpoint and classify its response.
      *
-     * @return array<string,mixed>|string
+     * #590 — the endpoint has TWO 200 shapes and which one arrives is not the company's to predict:
+     * a person whose source field is PRIVATE yields {@code application/json}
+     * {@code {"encrypted":true,"value":<wrapper>}}, a person whose field is not yields the file's own
+     * Content-Type and the bytes themselves. The decision is made on {@code Content-Type} and never by
+     * sniffing the body — a PDF or an image that happened to start with a brace would be
+     * indistinguishable from a wrapper.
+     *
+     * A 410 {@code company_data.file_expired} (the answer's 90-day retention has elapsed) surfaces as
+     * an {@see ApiError} whose {@code details} carry {@code content_sha256} and {@code expired_at}.
      */
-    private function binaryFetch(string $valueUrl): array|string
+    private function binaryFetch(string $valueUrl): BinaryFetchResult
     {
-        $body = $this->http->get($valueUrl);
-        if (is_array($body) && array_key_exists('value', $body)) {
-            /** @var array<string,mixed>|string */
-            return $body['value'];
+        $resp = $this->http->getResponse($valueUrl);
+        $contentType = $resp->header('Content-Type') ?? '';
+        $digest = $resp->header('X-Allus-Content-Sha256');
+
+        // Plaintext is claimed ONLY on a Content-Type that positively says so. A missing or empty
+        // header falls through to the JSON path — the historical shape — because the two failure modes
+        // are not symmetrical: mistaking a wrapper for file bytes writes the ciphertext envelope to
+        // disk as if it were the document and nothing complains, while mistaking bytes for a wrapper
+        // fails loudly at the parse. Guess towards the loud one.
+        $isJsonish = $contentType === ''
+            || stripos($contentType, 'json') !== false
+            || stripos($contentType, 'xml') !== false;
+        if (!$isJsonish) {
+            return new BinaryFetchResult(
+                encrypted: false,
+                bytes: $resp->body,
+                contentType: $contentType !== '' ? $contentType : null,
+                contentSha256: $digest,
+            );
         }
-        // Defensive: some shapes might return the wrapper directly.
-        /** @var array<string,mixed>|string $body */
-        return $body;
+
+        // Parsed through the client's OWN parser, not a hard-coded json_decode: an XML-configured
+        // client speaks XML on every other endpoint and must not silently lose it on this one.
+        $body = $this->http->parseBody($resp, $this->http->wantsXml());
+        $wrapper = is_array($body) && array_key_exists('value', $body) ? $body['value'] : $body;
+        /** @var array<string,mixed>|string $wrapper */
+        return new BinaryFetchResult(
+            encrypted: true,
+            wrapper: $wrapper,
+            contentType: $contentType,
+            contentSha256: $digest,
+        );
     }
 
     /** Resolve a request slug to its field type (loads the catalog once). */
@@ -293,7 +324,7 @@ final class Client
                     $obj,
                     fn (string $slug): ?string => $this->typeForSlug($slug),
                     fn (array|string $w): string => $this->decryptValue($w),
-                    fn (string $u): array|string => $this->binaryFetch($u),
+                    fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
                     // The list row carries identity AND the values map.
                     identity: $obj,
                 );
@@ -358,7 +389,7 @@ final class Client
             $obj,
             fn (string $slug): ?string => $this->typeForSlug($slug),
             fn (array|string $w): string => $this->decryptValue($w),
-            fn (string $u): array|string => $this->binaryFetch($u),
+            fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
         );
     }
 
@@ -472,7 +503,7 @@ final class Client
             $event,
             fn (string $slug): ?string => $this->typeForSlug($slug),
             fn (array|string $w): string => $this->decryptValue($w),
-            fn (string $u): array|string => $this->binaryFetch($u),
+            fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
         );
     }
 
@@ -560,7 +591,7 @@ final class Client
             $this->config,
             fn (string $slug): ?string => $this->typeForSlug($slug),
             fn (array|string $w): string => $this->decryptValue($w),
-            fn (string $u): array|string => $this->binaryFetch($u),
+            fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             $this->accountKey, // cached once; no per-webhook PBKDF2
         );
     }
@@ -578,7 +609,7 @@ final class Client
             $this->config,
             fn (string $slug): ?string => $this->typeForSlug($slug),
             fn (array|string $w): string => $this->decryptValue($w),
-            fn (string $u): array|string => $this->binaryFetch($u),
+            fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             $this->accountKey, // cached once; no per-webhook PBKDF2
         );
     }
@@ -1007,7 +1038,7 @@ final class Client
     {
         return (new BinaryHandle(
             valueUrl: self::BASE . '/flow-runs/' . rawurlencode($runId) . '/document/file',
-            fetch: fn (string $u): array|string => $this->binaryFetch($u),
+            fetch: fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             decrypt: fn (array|string $w): string => $this->decryptValue($w),
         ))->bytes();
     }

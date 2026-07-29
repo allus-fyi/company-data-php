@@ -73,19 +73,34 @@ network or decryption happens at construction.
 ```php
 final class BinaryHandle {
     public function valueUrl(): ?string;        // the opaque slot-keyed file URL (read-only)
-    public function bytes(): string;            // fetch (if needed) → decrypt → decoded primary file bytes
+    public function bytes(): string;            // fetch (if needed) → the file bytes, either shape
     public function save(string $path): int;    // write bytes() to path crash-safely; returns bytes written
+    public function contentSha256(): ?string;   // X-Allus-Content-Sha256 for the fetched bytes
+    public function contentType(): ?string;     // the Content-Type they arrived with
 }
 ```
 
-On first `->bytes()`/`->save()`:
+On first `->bytes()`/`->save()` it GETs the slot-keyed file endpoint, which has
+**two 200 shapes** decided by whether the *person's* source field is private —
+their setting, changeable at any time and not exposed to you:
 
-1. GET the slot-keyed file endpoint → the API serves `{"encrypted": true, "value": <wrapper>}`.
-2. Decrypt the inner `{"_enc":1,…}` wrapper with the service key → a JSON file-envelope string (`{"full": "data:…", "thumb": …}` for photos, `{"file": "data:…", …}` for documents).
-3. Base64-decode the primary data URI (`full` for photos, `file` for documents) → the file bytes. Cached on the handle (repeated calls don't re-fetch).
+- **`application/json`** → `{"encrypted": true, "value": <wrapper>}`. Decrypt the
+  inner `{"_enc":1,…}` wrapper with the service key → a JSON file-envelope string
+  (`{"full": "data:…", "thumb": …}` photos, `{"file": "data:…", …}` documents) →
+  base64-decode the primary data URI (`full` / `file`) → the file bytes.
+- **any other `Content-Type`** → the body IS the file. Nothing is decrypted, and a
+  handle with no decrypt wiring still works.
+
+The shapes are told apart on `Content-Type`, never by sniffing the body: reading a
+wrapper as bytes would write ciphertext to disk with nothing to signal it, so a
+missing header resolves to the JSON path, which fails loudly instead. The result
+is cached on the handle (repeated calls don't re-fetch).
 
 `->save()` is crash-safe (temp file → `fsync` → atomic `rename`). An unanswered
 binary slot yields an empty handle; calling `->bytes()` on it throws `DecryptError`.
+A **Share once** answer whose 90-day retention has elapsed throws `ApiError`
+(status 410, `errorKey` `company_data.file_expired`) whose `->details` carry
+`content_sha256` and `expired_at`.
 
 ## `Change`
 

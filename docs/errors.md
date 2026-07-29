@@ -28,12 +28,30 @@ all). `ConfigError`, `AuthError`, `DecryptError`, `WebhookError` are `final`;
 class ApiError extends \RuntimeException {
     public readonly int     $status;    // the HTTP status
     public readonly ?string $errorKey;  // the platform error_key, when the body provided one
+    public readonly array   $details;   // every OTHER field of the error body, verbatim ([] when none)
     // getMessage() is "HTTP <status> (<error_key>): <message>"
 }
 ```
 
 A transport failure (no HTTP response — e.g. a connection error) surfaces as
 `ApiError` with `status === 0`.
+
+`$details` exists because some responses carry data beside the key. The one that
+matters today is a **410 `company_data.file_expired`** from a binary slot's file
+endpoint — a Share-once answer whose 90-day retention has elapsed — which returns
+the expired answer's `content_sha256` and `expired_at`, so you can still identify
+what you once held:
+
+```php
+try {
+    $bytes = $handle->bytes();
+} catch (ApiError $e) {
+    if ($e->status === 410 && $e->errorKey === 'company_data.file_expired') {
+        $digest    = $e->details['content_sha256'] ?? null;
+        $expiredAt = $e->details['expired_at'] ?? null;
+    }
+}
+```
 
 ## `RateLimitError`
 

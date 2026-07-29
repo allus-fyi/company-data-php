@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Allus\CompanyData\Tests;
 
+use Allus\CompanyData\Crypto\BinaryFetchResult;
 use Allus\CompanyData\Crypto\BinaryHandle;
 use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Errors\DecryptError;
@@ -152,11 +153,17 @@ final class CryptoTest extends TestCase
 
     public function testBinaryHandleLazyFetchAndDecrypt(): void
     {
-        // The fetch callback returns the encrypted wrapper for the slot.
+        // #590: the fetch callback classifies the response. Here it reports the ENCRYPTED shape —
+        // what the route serves when the person's source field is private.
         $captured = [];
-        $fetch = function (string $url) use (&$captured): array {
+        $fetch = function (string $url) use (&$captured): BinaryFetchResult {
             $captured['url'] = $url;
-            return self::$vector['binary']['wrapper'];
+            return new BinaryFetchResult(
+                encrypted: true,
+                wrapper: self::$vector['binary']['wrapper'],
+                contentType: 'application/json',
+                contentSha256: 'deadbeef',
+            );
         };
         $decrypt = fn (array|string $w): string => Crypto::decrypt($w, self::$key);
 

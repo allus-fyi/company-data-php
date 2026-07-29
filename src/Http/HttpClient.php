@@ -164,6 +164,21 @@ final class HttpClient
     }
 
     /**
+     * GET returning the whole 2xx {@see Response} — status, headers AND raw body, with no parse.
+     *
+     * #590: the company-facing binary file endpoints have two 200 shapes (a JSON wrapper for an
+     * encrypted answer, raw file bytes for a plaintext one) that are told apart by
+     * {@code Content-Type}, and both carry an {@code X-Allus-Content-Sha256} digest header. Neither
+     * {@see get} (which parses) nor {@see getRaw} (which drops the headers) can express that, so this
+     * hands the caller the response itself. Auth/refresh/retry and error mapping are identical.
+     */
+    public function getResponse(string $path): Response
+    {
+        /** @var Response */
+        return $this->request('GET', $path, null, null, null, null, false, true);
+    }
+
+    /**
      * POST {@code $path} with a JSON body or raw bytes → parsed body.
      *
      * @param array<string,mixed>|list<mixed>|null $jsonBody
@@ -210,7 +225,7 @@ final class HttpClient
      * @param array<string,scalar>|null $params
      * @param array<string,mixed>|list<mixed>|null $jsonBody
      *
-     * @return array<string,mixed>|list<mixed>|string
+     * @return array<string,mixed>|list<mixed>|string|Response
      */
     private function request(
         string $method,
@@ -220,7 +235,8 @@ final class HttpClient
         ?string $rawBody = null,
         ?string $contentType = null,
         bool $raw = false,
-    ): array|string {
+        bool $wantResponse = false,
+    ): array|string|Response {
         $url = $this->url($path);
         $wantsXml = $this->config->format === 'xml';
         $accept = $wantsXml ? 'application/xml' : 'application/json';
@@ -251,6 +267,9 @@ final class HttpClient
             $status = $resp->status;
 
             if ($status >= 200 && $status < 300) {
+                if ($wantResponse) {
+                    return $resp;
+                }
                 return $raw ? $resp->body : $this->parseBody($resp, $wantsXml);
             }
 
@@ -287,8 +306,8 @@ final class HttpClient
             }
 
             // Any other non-2xx → ApiError with the body's error_key.
-            [$errorKey, $message] = $this->extractError($resp);
-            throw new ApiError($status, $errorKey, $message);
+            [$errorKey, $message, $details] = $this->extractError($resp);
+            throw new ApiError($status, $errorKey, $message, $details);
         }
     }
 
@@ -303,7 +322,7 @@ final class HttpClient
     /**
      * @return array<string,mixed>|list<mixed>|string
      */
-    private function parseBody(Response $resp, bool $wantsXml): array|string
+    public function parseBody(Response $resp, bool $wantsXml): array|string
     {
         $text = $resp->body;
         if (trim($text) === '') {
@@ -323,12 +342,20 @@ final class HttpClient
         return $body;
     }
 
+    /** #590: the binary file fetch parses the structured shape itself, and must do it the way the
+     *  rest of this client does — an XML-configured client would otherwise silently lose XML support
+     *  on exactly one endpoint. */
+    public function wantsXml(): bool
+    {
+        return $this->config->format === 'xml';
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     /**
      * Pull {@code error_key} + a message out of a non-2xx body (JSON or XML).
      *
-     * @return array{0: ?string, 1: ?string}
+     * @return array{0: ?string, 1: ?string, 2: array<string,mixed>}
      */
     private function extractError(Response $resp): array
     {
@@ -338,18 +365,27 @@ final class HttpClient
             try {
                 $body = Xml::parse($resp->body);
             } catch (\Throwable) {
-                return [null, $resp->body !== '' ? $resp->body : null];
+                // Three elements on EVERY path: the caller destructures three, and a two-element
+                // return here would be an undefined-key warning plus a TypeError into ApiError's
+                // typed `array $details` — on the error path, where it is least likely to be noticed.
+                return [null, $resp->body !== '' ? $resp->body : null, []];
             }
         }
         if (is_array($body) && !array_is_list($body)) {
             $errorKey = $body['error_key'] ?? null;
             $message = $body['error'] ?? ($body['message'] ?? null);
+            // #590: everything BESIDE the key and the message travels on as `details`, so a body that
+            // carries actionable data (a 410 file_expired's content_sha256 + expired_at) is readable
+            // without a bespoke exception type per response.
+            $details = $body;
+            unset($details['error_key'], $details['error'], $details['message']);
             return [
                 $errorKey !== null ? (string) $errorKey : null,
                 $message !== null ? (string) $message : null,
+                $details,
             ];
         }
-        return [null, null];
+        return [null, null, []];
     }
 
     /** Parse the Retry-After header (delta-seconds form) → float seconds. */

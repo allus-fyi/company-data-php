@@ -624,12 +624,37 @@ $n    = $handle->save('/tmp/passport.jpg');         // same, written to disk; re
 echo $handle->valueUrl();                            // the opaque slot-keyed URL it fetches from
 ```
 
-`->bytes()` GETs the slot-keyed file endpoint, unwraps the API's
-`{"encrypted": true, "value": <wrapper>}` envelope, decrypts with your service
-key, parses the inner JSON envelope (`{"full": "data:…"}` for photos,
-`{"file": "data:…"}` for documents) and base64-decodes the data URI into the file
-bytes. The result is cached on the handle, so repeated calls don't re-fetch.
-`->save()` writes crash-safely (temp file → fsync → atomic rename).
+`->bytes()` GETs the slot-keyed file endpoint and returns the file bytes. The
+result is cached on the handle, so repeated calls don't re-fetch. `->save()`
+writes crash-safely (temp file → fsync → atomic rename).
+
+**That endpoint has two 200 shapes and you cannot predict which one you get.** It
+depends on whether the *person's* source field is private — their setting, which
+they can change at any time and which the API deliberately does not expose:
+
+| person's source field | response | the handle does |
+|---|---|---|
+| private | `application/json` · `{"encrypted": true, "value": <wrapper>}` | decrypt with your service key → the JSON envelope (`{"full": "data:…"}` photos, `{"file": "data:…"}` documents) → base64-decode the data URI |
+| not private | the file's own `Content-Type` · the body **is** the file | return the bytes as-is; no key needed |
+
+The SDK tells them apart on `Content-Type` and never by sniffing the body. A
+plaintext answer works on a handle with no decrypt wiring at all.
+
+```php
+echo $handle->contentSha256();   // X-Allus-Content-Sha256 — the digest of exactly these bytes
+echo $handle->contentType();     // the Content-Type they arrived with
+```
+
+A photo slot serves the authoritative image; there is no thumbnail variant to
+select, because one slot has one byte sequence and therefore one digest.
+
+A **Share once** answer's bytes are kept 90 days. Afterwards the slot still reads
+as answered but `->bytes()` throws `ApiError` with `status === 410` and
+`errorKey === 'company_data.file_expired'`; its `->details` carry
+`content_sha256` and `expired_at`, so you can still identify what you once held.
+The values map also gains `content_sha256`, and `expired`/`expired_at` after
+expiry, reachable on `$value->raw`; the `field_deleted` the expiry emits carries
+`content_sha256` on `$change->raw`.
 
 ### `Change`
 
@@ -963,10 +988,14 @@ decrypts the payload via the openssl ext. **The platform only ever holds
 ciphertext — it never sees your plaintext.**
 
 **Binary fetch.** A binary value is a lazy `BinaryHandle` over a slot-keyed
-`value_url`. On `->bytes()`/`->save()` it GETs that file endpoint, unwraps the
-`{"encrypted":true,"value":<wrapper>}` envelope, runs the same service-key decrypt
-to a JSON file-envelope, and base64-decodes its data URI to the file bytes.
-(Slot-keyed, never source-field-keyed.)
+`value_url` (slot-keyed, never source-field-keyed). On `->bytes()`/`->save()` it
+GETs that file endpoint and branches on the response `Content-Type`: an
+`application/json` `{"encrypted":true,"value":<wrapper>}` envelope runs the same
+service-key decrypt to a JSON file-envelope and base64-decodes its data URI,
+while any other content type IS the file and is returned untouched. The body is
+never sniffed — reading a wrapper as bytes would write ciphertext to disk with no
+error, so the ambiguous case (no `Content-Type` at all) resolves to the JSON path,
+which fails loudly instead.
 
 **The drain-on-fetch feed.** `processChanges` delegates to a `Pump` wired to a
 `fetchChanges` closure (`GET /changes?limit=`, returning raw ciphertext events)

@@ -234,6 +234,114 @@ final class ClientTest extends TestCase
         self::assertSame(self::$vector['binary']['inner_full_sha256'], hash('sha256', $data));
     }
 
+    /**
+     * #590 — the SAME slot URL serves raw file bytes when the person's source field is NOT private.
+     * The handle must return the file either way, without the caller knowing which shape arrived, and
+     * must not try to decrypt bytes that were never encrypted.
+     */
+    public function testBinaryHandleServesPlaintextBytes(): void
+    {
+        $page = ['total' => 1, 'items' => [[
+            'connection_id' => 'csc-1', 'user_id' => 'person-1', 'display_name' => 'Anna',
+            'values' => ['logo' => ['value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file', 'live' => true]],
+        ]]];
+        $bytes = "\xff\xd8\xff\xe0not-really-a-jpeg";
+        [$client, $t] = $this->client(function (string $url, ?array $q) use ($page, $bytes): Response {
+            if (str_ends_with($url, '/request-fields')) {
+                return FakeTransport::json(200, self::requestFieldsBody());
+            }
+            if (str_ends_with($url, '/connections')) {
+                return FakeTransport::json(200, $page);
+            }
+            if (str_ends_with($url, '/slots/sf-9/file')) {
+                return FakeTransport::text(200, $bytes, [
+                    'Content-Type' => 'image/jpeg',
+                    'X-Allus-Content-Sha256' => hash('sha256', $bytes),
+                ]);
+            }
+            throw new \AssertionError("unexpected GET {$url}");
+        });
+
+        $handle = iterator_to_array($client->connections())[0]->values['logo']->value;
+        self::assertInstanceOf(BinaryHandle::class, $handle);
+        self::assertSame($bytes, $handle->bytes());
+        self::assertSame('image/jpeg', $handle->contentType());
+        self::assertSame(hash('sha256', $bytes), $handle->contentSha256());
+    }
+
+    /** #590 — a 410 file_expired surfaces the digest and the expiry date through ApiError::$details. */
+    public function testBinaryHandleExpiredAnswerCarriesDigest(): void
+    {
+        $page = ['total' => 1, 'items' => [[
+            'connection_id' => 'csc-1', 'user_id' => 'person-1', 'display_name' => 'Anna',
+            'values' => ['logo' => ['value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file', 'live' => false]],
+        ]]];
+        [$client] = $this->client(function (string $url, ?array $q) use ($page): Response {
+            if (str_ends_with($url, '/request-fields')) {
+                return FakeTransport::json(200, self::requestFieldsBody());
+            }
+            if (str_ends_with($url, '/connections')) {
+                return FakeTransport::json(200, $page);
+            }
+            return FakeTransport::json(410, [
+                'error' => 'This file has expired',
+                'error_key' => 'company_data.file_expired',
+                'content_sha256' => 'abc123',
+                'expired_at' => '2026-07-01T00:00:00Z',
+            ]);
+        });
+
+        $handle = iterator_to_array($client->connections())[0]->values['logo']->value;
+        try {
+            $handle->bytes();
+            self::fail('expected an ApiError');
+        } catch (\Allus\CompanyData\Errors\ApiError $e) {
+            self::assertSame(410, $e->status);
+            self::assertSame('company_data.file_expired', $e->errorKey);
+            self::assertSame('abc123', $e->details['content_sha256'] ?? null);
+            self::assertSame('2026-07-01T00:00:00Z', $e->details['expired_at'] ?? null);
+        }
+    }
+
+    /**
+     * #590 — the encrypted shape must still parse for an XML-configured client. The classification
+     * rule routes an `application/xml` response to the STRUCTURED path, so if that path hard-coded
+     * `json_decode` the SDK would fail on every binary value in xml mode — a regression invisible to
+     * every other test, because nothing else exercises xml on this route.
+     */
+    public function testBinaryFetchParsesEncryptedShapeInXmlMode(): void
+    {
+        $wrapper = self::$vector['binary']['wrapper'];
+        $xml = '<?xml version="1.0"?><response>'
+            . '<encrypted>true</encrypted>'
+            . '<value>'
+            . '<_enc>' . $wrapper['_enc'] . '</_enc>'
+            . '<k>' . $wrapper['k'] . '</k>'
+            . '<iv>' . $wrapper['iv'] . '</iv>'
+            . '<d>' . $wrapper['d'] . '</d>'
+            . '</value></response>';
+
+        $cfg = new Config(
+            apiUrl: 'https://api.allme.fyi',
+            clientId: 'svc_abc',
+            clientSecret: 'topsecret',
+            servicePrivateKey: $this->pemPath,
+            keyPassphrase: self::$vector['passphrase'],
+            cacheDir: $this->dir . '/cache-xml',
+            format: 'xml',
+        );
+        $t = new FakeTransport(function (string $url, ?array $q) use ($xml): Response {
+            if (str_ends_with($url, '/document/file')) {
+                return FakeTransport::text(200, $xml, ['Content-Type' => 'application/xml']);
+            }
+            throw new \AssertionError("unexpected GET {$url}");
+        });
+        $client = new Client($cfg, http: new HttpClient($cfg, transport: $t), sleep: fn (float $_s): null => null);
+
+        $data = $client->flowRunDocument('run-1');
+        self::assertSame(self::$vector['binary']['inner_full_sha256'], hash('sha256', $data));
+    }
+
     // ── connection(id) ─────────────────────────────────────────────────────────
 
     public function testConnectionById(): void

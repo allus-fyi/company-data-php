@@ -11,23 +11,33 @@ use Allus\CompanyData\Util\AtomicFile;
  * Lazy handle for a binary (photo/document) value.
  *
  * A binary answer is stored server-side as a file, exposed in the hardened API as
- * a slot-keyed {@code value_url} (never the source field). On {@see bytes()} /
- * {@see save()} the handle GETs that URL, receives the {@code {"_enc":1,...}}
- * wrapper, runs the same decrypt as text → a JSON envelope STRING (photo:
- * {@code {"full":"data:...","thumb":...}}; document:
- * {@code {"file":"data:...",...}}) — NOT raw bytes — then parses the envelope and
- * base64-decodes the primary data-URI payload ({@code full} for photos,
- * {@code file} for documents) into the file bytes.
+ * a slot-keyed {@code value_url} (never the source field). {@see bytes()} and
+ * {@see save()} GET that URL and return the FILE BYTES either way — the caller
+ * never has to know which of the two response shapes arrived.
+ *
+ * #590 — THERE ARE TWO SHAPES, AND WHICH ONE ARRIVES IS THE PERSON'S CHOICE, NOT THE
+ * COMPANY'S. Whether the person's source field is private decides it, they can change it at
+ * any time, and nothing in the API announces it in advance:
+ *
+ * - **private source** → {@code application/json} {@code {"encrypted":true,"value":<wrapper>}}.
+ *   The wrapper decrypts to a JSON envelope STRING (photo:
+ *   {@code {"full":"data:...","thumb":...}}; document: {@code {"file":"data:...",...}}) — NOT raw
+ *   bytes — whose primary data-URI payload ({@code full} for photos, {@code file} for documents)
+ *   base64-decodes to the file.
+ * - **plaintext source** → the file's own {@code Content-Type} and the body IS the file. There is
+ *   nothing to decrypt, and a handle built this way needs no service key at all.
+ *
+ * Photos resolve to the {@code full} representation. There is no variant selection: one slot has one
+ * byte sequence and therefore one digest.
  *
  * The fetch + decrypt are supplied by the client as plain callables:
  *
- * - {@code valueUrl} + {@code fetch} — {@code fetch(valueUrl)} returns the
- *   encrypted wrapper (array or its JSON string), the way the slot file endpoint
- *   serves {@code {"encrypted":true,"value":<wrapper>}} (the client passes a
- *   callback that does the GET + unwraps to the inner wrapper).
+ * - {@code valueUrl} + {@code fetch} — {@code fetch(valueUrl)} returns a
+ *   {@see BinaryFetchResult} saying which shape arrived (the client classifies it on the response's
+ *   {@code Content-Type}; the body is never sniffed).
  * - {@code decrypt} — {@code decrypt(wrapper)} returns the decrypted envelope
  *   string (a closure over the loaded service private key, so no key is ever
- *   passed to this handle — config-only key handling).
+ *   passed to this handle — config-only key handling). Only ever called for the encrypted shape.
  *
  * When the decrypted envelope is already in hand, a handle can also be built
  * directly from {@code envelopeJson} (no fetch).
@@ -39,14 +49,21 @@ final class BinaryHandle
 
     private ?string $envelopeJson;
 
-    /** @var (callable(string): (array<string,mixed>|string))|null */
+    /** Plaintext file bytes, once a plaintext-shaped response has been fetched. */
+    private ?string $plainBytes = null;
+
+    private ?string $contentType = null;
+
+    private ?string $contentSha256 = null;
+
+    /** @var (callable(string): BinaryFetchResult)|null */
     private $fetch;
 
     /** @var (callable(array<string,mixed>|string): string)|null */
     private $decrypt;
 
     /**
-     * @param callable(string): (array<string,mixed>|string)|null $fetch
+     * @param callable(string): BinaryFetchResult|null $fetch
      * @param callable(array<string,mixed>|string): string|null $decrypt
      */
     public function __construct(
@@ -73,7 +90,37 @@ final class BinaryHandle
      */
     public function bytes(): string
     {
+        if ($this->plainBytes !== null) {
+            return $this->plainBytes;
+        }
+        if ($this->envelopeJson === null) {
+            $this->fetchOnce();
+            if ($this->plainBytes !== null) {
+                return $this->plainBytes;
+            }
+        }
+
         return self::parseEnvelopeBytes($this->resolveEnvelope());
+    }
+
+    /**
+     * The platform's {@code X-Allus-Content-Sha256} for the bytes this handle fetched — the sha256 of
+     * exactly what {@see bytes()} returns, so a consumer can record it and later show that its archived
+     * copy has not drifted. {@code null} until something has been fetched, and on a handle built from an
+     * envelope that was never fetched through this class.
+     *
+     * It is the platform's word, not a signature: it proves agreement with the platform's record, not
+     * anything to a third party who doubts that record.
+     */
+    public function contentSha256(): ?string
+    {
+        return $this->contentSha256;
+    }
+
+    /** The response {@code Content-Type} the bytes arrived with, once fetched. */
+    public function contentType(): ?string
+    {
+        return $this->contentType;
     }
 
     /**
@@ -149,16 +196,44 @@ final class BinaryHandle
         if ($this->envelopeJson !== null) {
             return $this->envelopeJson;
         }
-        if ($this->fetch === null || $this->decrypt === null || $this->valueUrl === null) {
+        $this->fetchOnce();
+        if ($this->envelopeJson === null) {
+            throw new DecryptError('binary answer arrived as plaintext bytes; use bytes()/save()');
+        }
+        return $this->envelopeJson;
+    }
+
+    /**
+     * Fetch once and record which shape arrived. Idempotent: the result is cached on the handle so
+     * repeated {@see bytes()}/{@see save()} calls do not re-fetch, and so a plaintext answer's digest
+     * survives for {@see contentSha256()}.
+     *
+     * @throws DecryptError
+     */
+    private function fetchOnce(): void
+    {
+        if ($this->plainBytes !== null || $this->envelopeJson !== null) {
+            return;
+        }
+        if ($this->fetch === null || $this->valueUrl === null) {
             throw new DecryptError(
-                'BinaryHandle has no envelope and no fetch/decrypt wiring '
+                'BinaryHandle has no envelope and no fetch wiring '
                 . '(build it with envelopeJson, or valueUrl + fetch + decrypt)'
             );
         }
-        $wrapper = ($this->fetch)($this->valueUrl);
-        $envelopeJson = ($this->decrypt)($wrapper);
-        // Cache so repeated bytes()/save() don't re-fetch.
-        $this->envelopeJson = $envelopeJson;
-        return $envelopeJson;
+        $result = ($this->fetch)($this->valueUrl);
+        $this->contentType = $result->contentType;
+        $this->contentSha256 = $result->contentSha256;
+
+        if (!$result->encrypted) {
+            // A plaintext answer needs no service key. Requiring `decrypt` here would make a handle
+            // built without one fail on exactly the answers that do not need it.
+            $this->plainBytes = $result->bytes ?? '';
+            return;
+        }
+        if ($this->decrypt === null) {
+            throw new DecryptError('binary answer is encrypted but this handle has no decrypt wiring');
+        }
+        $this->envelopeJson = ($this->decrypt)($result->wrapper ?? '');
     }
 }
