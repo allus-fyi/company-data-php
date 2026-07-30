@@ -120,6 +120,14 @@ final class Server
         } elseif ($path === '/api/clear' && $method === 'POST') {
             $this->rt->clearAll();
             $this->emit(Response::json(['ok' => true]));
+        } elseif ($path === '/api/state' && $method === 'POST') {
+            // The setup snapshot, stored verbatim; the bytes are never inspected here.
+            $this->rt->writeState((string) file_get_contents('php://input'));
+            $this->emit(Response::json(['ok' => true]));
+        } elseif ($path === '/api/state' && $method === 'GET') {
+            // Handed back exactly as stored; no snapshot file at all → 404 not_found.
+            $blob = $this->rt->readState();
+            $this->emit($blob === null ? Response::json(['error' => 'not_found'], 404) : Response::rawJson($blob));
         } elseif (preg_match("#^/api/scenarios/{$sid}/config$#", $path, $m) && $method === 'POST') {
             $this->emit($this->dispatch($m[1], fn (Family $f) => $f->config($m[1], $this->body())));
         } elseif (preg_match("#^/api/scenarios/{$sid}/start$#", $path, $m) && $method === 'POST') {
@@ -225,6 +233,10 @@ final class Server
             case 'text':
                 header('Content-Type: text/plain; charset=utf-8');
                 echo $r->text;
+                return;
+            case 'rawjson':
+                header('Content-Type: application/json');
+                echo $r->text; // already-encoded JSON, passed through untouched
                 return;
             case 'json':
             default:

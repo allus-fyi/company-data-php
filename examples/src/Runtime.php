@@ -18,6 +18,8 @@ namespace Allus\Examples;
  *   - config/keys/<sha1>.pem   — the private-key file(s) a config references by path (mode 0600)
  *   - runs/{runId}.json        — one run's PKCE/state/nonce/outcome (+ its family + public scenario id)
  *   - webhook-route.json       — the SINGLE active company-data webhook run {webhookId, runId} (spec §2)
+ *   - state.json               — the setup snapshot POSTed to /api/state, held verbatim as OPAQUE cold
+ *                                storage: never parsed here, never used to run anything
  *   - cache/                   — the SDK pump's buffer + dead-letters (company-data Config.cacheDir)
  *
  * Config files are keyed by the PUBLIC scenario id via {@see sid()} (e.g. "1", "flow:run",
@@ -38,6 +40,7 @@ final class Runtime
     public readonly string $configKeysDir;
     public readonly string $cacheDir;
     public readonly string $routePath;
+    public readonly string $statePath;
 
     public function __construct(string $baseDir)
     {
@@ -49,6 +52,7 @@ final class Runtime
         // so Clear / the startup wipe removes it and the "writes only under .runtime/" property holds.
         $this->cacheDir = $this->runtimeDir . '/cache';
         $this->routePath = $this->runtimeDir . '/webhook-route.json';
+        $this->statePath = $this->runtimeDir . '/state.json';
     }
 
     /** Ensure the runtime directories exist (idempotent). */
@@ -273,6 +277,43 @@ final class Runtime
         @unlink($this->routePath);
     }
 
+    // ── the setup snapshot (POST/GET /api/state) ──────────────────────────────
+
+    /**
+     * Store the setup snapshot the request carried, VERBATIM. The bytes are OPAQUE here — never
+     * parsed, never inspected, never used to run anything — so nothing in this class constrains what
+     * they may contain, and an empty body is a snapshot like any other. Carries no TTL (it is setup,
+     * not a run); removed by a global clear or the startup wipe.
+     */
+    public function writeState(string $blob): void
+    {
+        $this->ensureDirs();
+        $this->atomicWrite($this->statePath, $blob);
+    }
+
+    /**
+     * The stored snapshot's bytes, or null when NO snapshot file exists — the file's presence is the
+     * whole of the answer, since judging the content would be the inspection this store does not do.
+     * A file that exists but cannot be read is a fault, not an absence, so it is raised rather than
+     * reported as "nothing saved".
+     */
+    public function readState(): ?string
+    {
+        if (!is_file($this->statePath)) {
+            return null;
+        }
+        $raw = @file_get_contents($this->statePath);
+        if ($raw === false) {
+            throw new \RuntimeException('could not read the saved setup snapshot at ' . $this->statePath);
+        }
+        return $raw;
+    }
+
+    public function clearState(): void
+    {
+        @unlink($this->statePath);
+    }
+
     // ── clear ────────────────────────────────────────────────────────────────
 
     /**
@@ -301,7 +342,11 @@ final class Runtime
         $this->ensureDirs();
     }
 
-    /** Global clear: wipe all run files, the config tree (configs, metas, keys), the route + pump cache. */
+    /**
+     * Global clear: wipe all run files, the config tree (configs, metas, keys), the route + pump cache,
+     * and the saved setup snapshot. The snapshot goes too because it can hold the same credentials the
+     * config tree does — a clear that left it behind would leave those sitting on disk.
+     */
     public function clearAll(): void
     {
         foreach (glob($this->runsDir . '/*') ?: [] as $path) {
@@ -310,6 +355,7 @@ final class Runtime
         $this->rmTree($this->configDir);
         $this->rmTree($this->cacheDir);
         $this->clearRoute();
+        $this->clearState();
         $this->ensureDirs();
     }
 

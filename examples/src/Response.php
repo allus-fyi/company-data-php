@@ -14,7 +14,7 @@ final class Response
     /** @param array<string,mixed>|null $json */
     private function __construct(
         public readonly int $status,
-        public readonly string $kind,          // 'json' | 'text' | 'redirect'
+        public readonly string $kind,          // 'json' | 'rawjson' | 'text' | 'redirect'
         public readonly ?array $json = null,
         public readonly string $text = '',
         public readonly string $location = '',
@@ -47,6 +47,16 @@ final class Response
             'error' => $token . ' — ' . ($reason !== '' ? $reason : 'no reason was reported'),
             'message' => $reason,
         ], $status);
+    }
+
+    /**
+     * Serve a JSON document that is already encoded, byte for byte — the stored setup snapshot. It is
+     * passed through untouched because decoding and re-encoding it here would rewrite bytes this
+     * server is not allowed to interpret.
+     */
+    public static function rawJson(string $json, int $status = 200): self
+    {
+        return new self($status, 'rawjson', text: $json);
     }
 
     public static function text(string $body, int $status = 200): self
