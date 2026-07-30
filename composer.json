@@ -2,7 +2,7 @@
     "name": "allus/company-data",
     "description": "PHP SDK for the allus company-data API: typed, plaintext, slug-keyed conclusions with transparent decryption.",
     "type": "library",
-    "version": "0.0.21",
+    "version": "0.0.22",
     "license": "MIT",
     "keywords": ["allus", "allme", "company-data", "sdk"],
     "homepage": "https://github.com/allus-fyi/company-data-php",
