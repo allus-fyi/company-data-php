@@ -201,7 +201,14 @@ final class OAuthClient
      * claim ABSENT from `attestations` means "not attested" — never "wrong" — and must be treated as
      * unverified. `verifiedAt` attests the value as verified AT THAT MOMENT, not verified today.
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
+     * `values_cipher` is an ADDITIVE sibling of `values`, keyed by the same claim name: the RAW
+     * app-key ciphertext wrapper `values` was decrypted from, exactly as delivered by userinfo. It
+     * lets a caller show — to itself, a log, or a person auditing the integration — that a claim's
+     * plaintext really did come from encrypted delivery rather than being trusted verbatim. Absent or
+     * empty for a claim/mode that carries no ciphertext (signin mode, or plaintext delivery, where
+     * there is honestly nothing to show); never a placeholder standing in for "none returned".
+     *
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
      */
     public function completeSignIn(string $code, ?string $codeVerifier = null): array
     {
@@ -212,10 +219,12 @@ final class OAuthClient
         }
         $info = $this->userinfo($accessToken);
         $values = [];
+        $valuesCipher = [];
         $attestations = [];
         $raw = $info['values'] ?? null;
         if (is_array($raw) && $raw !== []) {
             $values = $this->decryptValues($raw);
+            $valuesCipher = $raw;
             $rawAttest = $info['values_attestation'] ?? null;
             if (is_array($rawAttest) && $rawAttest !== []) {
                 $attestations = $this->decryptAttestations($rawAttest, $values);
@@ -230,6 +239,7 @@ final class OAuthClient
             'mode' => self::str($info, 'mode') ?? self::str($token, 'mode'),
             'two_factor' => (bool) ($info['two_factor'] ?? false),
             'values' => $values,
+            'values_cipher' => $valuesCipher,
             'attestations' => $attestations,
         ];
     }
