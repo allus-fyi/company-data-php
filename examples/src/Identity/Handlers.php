@@ -8,6 +8,7 @@ use Allus\CompanyData\Claim;
 use Allus\CompanyData\Client;
 use Allus\CompanyData\Config;
 use Allus\CompanyData\Errors\ApiError;
+use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\OAuthClient;
@@ -48,13 +49,10 @@ final class Handlers implements Family
     private const SERVICE_SCENARIOS = [4, 8];
 
     /**
-     * Scenarios whose {@see OAuthClient::completeSignIn()} response can carry claim values (userinfo
-     * `values` non-empty) and therefore need the OAuth app private key configured to decrypt them: mode
-     * one_time and mode connect, both delivered as app-key ciphertext through userinfo. Mode signin
-     * (scenarios 1, 2) never carries values; scenario 8 never calls this leg at all; scenario 5 runs the
-     * third-party OIDC library instead of this SDK's decrypt path.
+     * Scenarios that persist the OAuth app private key + passphrase, for {@see completeOidc()} and
+     * {@see OAuthClient::completeSignIn()} to decrypt userinfo values with.
      */
-    private const CLAIM_VALUE_SCENARIOS = [3, 4];
+    private const CLAIM_VALUE_SCENARIOS = [3, 4, 5];
 
     /** Scenarios that build an OAuth consent URL via {@see OAuthClient} (need the authorize base). */
     private const OAUTH_URL_SCENARIOS = [1, 2, 3, 4, 8];
@@ -108,6 +106,7 @@ final class Handlers implements Family
     private const CALL_OIDC_DISCOVERY = '(oidc) IssuerBuilder::build — discovery: fetches /.well-known/openid-configuration from the configured API base';
     private const CALL_OIDC_AUTH_URL = '(oidc) AuthorizationService::getAuthorizationUri — the authorization URL (scope openid profile email, PKCE S256, nonce, state = this run id)';
     private const CALL_OIDC_COMPLETE = '(oidc) AuthorizationService::callback — exchanges the code at the discovered token endpoint (client_secret_post + PKCE verifier), then verifies the id_token against the JWKS: signature, issuer, audience and nonce; the claims shown are that verified token\'s';
+    private const CALL_OIDC_USERINFO = 'OAuthClient::resolveUserinfo — reads GET /api/oauth/userinfo with the OIDC access token and decrypts every claim value and attestation with the OAuth app private key, for values that never reach the id_token regardless of delivery mode';
 
     public function __construct(private readonly Runtime $rt)
     {
@@ -349,6 +348,12 @@ final class Handlers implements Family
                 } else {
                     $run = $this->completeSignin($run, $code);
                 }
+            } elseif (isset($q['error']) && $q['error'] !== '') {
+                // The authorize step can redirect here with an OAuth error instead of a code. Name
+                // it rather than falling through to the generic "missing code" message below.
+                $run['status'] = 'failed';
+                $desc = (string) ($q['error_description'] ?? '');
+                $run['error'] = (string) $q['error'] . ($desc !== '' ? ': ' . $desc : '');
             } else {
                 $run['status'] = 'failed';
                 $run['error'] = 'callback missing code / enrolled';
@@ -492,6 +497,8 @@ final class Handlers implements Family
 
     /**
      * Complete an OIDC sign-in (scenario 5) via the third-party OIDC library — id_token verified.
+     * Additionally resolves userinfo through {@see OAuthClient::resolveUserinfo()} with the access
+     * token the library already obtained.
      *
      * @param array<string,mixed> $run
      * @return array<string,mixed>
@@ -512,8 +519,43 @@ final class Handlers implements Family
             $this->configRedirectUri($id),
             $session,
         );
+
+        $result = [
+            'claims' => $tokenSet->claims(),
+            'values' => [],
+            'values_cipher' => [],
+            'attestations' => [],
+            'values_gap' => null,
+        ];
+
+        $accessToken = (string) ($tokenSet->getAccessToken() ?? '');
+        if ($accessToken !== '') {
+            $run['calls'] = Runtime::addCall($run['calls'], $this->idwBuildCall($id));
+            $oauth = $this->oauthClientFor($id);
+            $run['calls'] = Runtime::addCall($run['calls'], self::CALL_OIDC_USERINFO);
+            try {
+                $out = $oauth->resolveUserinfo($accessToken);
+                $values = $out['values'];
+                $attestations = $out['attestations'];
+                // A `verified: false` attestation is a MISMATCH between the delivered value and
+                // what was verified — the value must be rejected, never shown as though it
+                // answered the claim.
+                foreach ($attestations as $slug => $attestation) {
+                    if (($attestation['verified'] ?? true) === false) {
+                        unset($values[$slug]);
+                    }
+                }
+                $result['values'] = $values;
+                $result['values_cipher'] = $out['values_cipher'];
+                $result['attestations'] = $attestations;
+            } catch (ConfigError $e) {
+                $result['values_gap'] = 'userinfo carried claim value(s) that could not be decrypted: '
+                    . $e->getMessage();
+            }
+        }
+
         $run['status'] = 'done';
-        $run['result'] = ['claims' => $tokenSet->claims()];
+        $run['result'] = $result;
         return $run;
     }
 

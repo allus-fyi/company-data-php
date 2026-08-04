@@ -217,6 +217,24 @@ final class OAuthClient
         if (!is_string($accessToken) || $accessToken === '') {
             throw new AuthError('token exchange returned no access_token');
         }
+
+        return $this->resolveUserinfo($accessToken, self::str($token, 'mode'));
+    }
+
+    /**
+     * Read + decrypt userinfo for an access token ALREADY held — the second half of
+     * {@see completeSignIn()}, split out so a caller that obtained its access token through its
+     * own separate exchange can still resolve and decrypt the claim values. Config-only key
+     * handling still holds — the caller passes no key/passphrase, only the token it already has;
+     * the private key is read from {@see Config} exactly as {@see completeSignIn()} does.
+     *
+     * Re-exchanging the code here would be wrong (a second exchange either mints a second grant or
+     * fails outright), so this method never does the exchange — only the read + decrypt.
+     *
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
+     */
+    public function resolveUserinfo(string $accessToken, ?string $fallbackMode = null): array
+    {
         $info = $this->userinfo($accessToken);
         $values = [];
         $valuesCipher = [];
@@ -236,7 +254,7 @@ final class OAuthClient
                 'sub' => self::str($info, 'sub'),
                 'share_code' => self::str($info, 'share_code'),
             ],
-            'mode' => self::str($info, 'mode') ?? self::str($token, 'mode'),
+            'mode' => self::str($info, 'mode') ?? $fallbackMode,
             'two_factor' => (bool) ($info['two_factor'] ?? false),
             'values' => $values,
             'values_cipher' => $valuesCipher,
