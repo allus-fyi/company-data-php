@@ -134,6 +134,8 @@ final class Server
             $this->emit($this->dispatch($m[1], fn (Family $f) => $f->start($m[1])));
         } elseif (preg_match("#^/api/scenarios/{$sid}/enroll$#", $path, $m) && $method === 'POST') {
             $this->emit($this->identity->enroll($m[1], $this->body())); // identity-only (scenario 8)
+        } elseif (preg_match("#^/api/scenarios/{$sid}/cleanup$#", $path, $m) && $method === 'POST') {
+            $this->emit($this->companyData->cleanup($m[1])); // company-data-only (companydata:documents)
         } elseif (preg_match("#^/api/scenarios/{$sid}/clear$#", $path, $m) && $method === 'POST') {
             $this->emit($this->clearScenario($m[1]));
         } elseif (preg_match('#^/api/runs/([0-9a-f]{32})$#', $path, $m) && $method === 'GET') {

@@ -64,6 +64,8 @@ final class Handlers implements Family
     private const CALL_REQUEST_FIELDS = 'Client::requestFields — GET /api/company-data/request-fields: your own request-field catalog, fetched once and cached for the life of the client';
     private const CALL_PROCESS_CHANGES = 'Client::processChanges — drains the change feed through the crash-safe pump: handler before ack, at-least-once (dedup on Change.id), failures to the local dead-letter store';
     private const CALL_CREATE_DOCUMENT = 'Client::createDocument — %s';
+    private const CALL_LIST_DOCUMENTS = 'Client::listDocuments — GET /api/company-data/documents: pages the service\'s documents so cleanup finds everything it created';
+    private const CALL_DELETE_DOCUMENT = 'Client::deleteDocument — DELETE /api/company-data/documents/%s';
     private const CALL_WEBHOOK_STARTED = '(webhook run started) — POST /webhook receives each delivery; every poll also drains the change feed as a fallback';
     private const CALL_VERIFY_WEBHOOK = 'Client::verifyWebhook — checks the delivery\'s X-Allus-Signature HMAC against the secret configured for its X-Allus-Webhook-Id; a failure answers 401';
     private const CALL_PARSE_WEBHOOK = 'Client::parseWebhook — turns the verified body into a typed Change, decrypting its value with the service key';
@@ -356,6 +358,47 @@ final class Handlers implements Family
             ];
         }
         return ['docs' => $docs];
+    }
+
+    // ── POST /api/scenarios/{id}/cleanup (companydata:documents only) ──────────
+
+    /**
+     * Delete every document the documents scenario has created on this service, so a reused
+     * account can reset between runs — companydata:documents is additive (createDocument mints a
+     * new document each run; nothing deletes a prior run's). Not part of the generic Family
+     * contract: routed directly, the same way enroll() is identity-only.
+     */
+    public function cleanup(string $id): Response
+    {
+        if ($id !== self::DOCUMENTS) {
+            return Response::json(['error' => 'not_found'], 404);
+        }
+        if (!$this->rt->hasConfig($id)) {
+            return Response::json(['error' => 'not_configured'], 409);
+        }
+        return $this->dataRun($id, fn (Client $c, array &$calls): array => $this->doCleanupDocuments($c, $calls));
+    }
+
+    /**
+     * @param array<int,string> $calls
+     * @return array<string,mixed>
+     */
+    private function doCleanupDocuments(Client $client, array &$calls): array
+    {
+        $deleted = 0;
+        while (true) {
+            $calls[] = self::CALL_LIST_DOCUMENTS;
+            $page = $client->listDocuments(null, null, 100, 0);
+            if ($page === []) {
+                break;
+            }
+            foreach ($page as $doc) {
+                $calls[] = sprintf(self::CALL_DELETE_DOCUMENT, $doc->id);
+                $client->deleteDocument($doc->id);
+                $deleted++;
+            }
+        }
+        return ['deleted' => $deleted];
     }
 
     // ── companydata:webhook — the accumulating run + public receiver ────────────
