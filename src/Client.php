@@ -72,6 +72,7 @@ final class Client
     private const LOGS = self::BASE . '/logs';
     private const DOCUMENTS = self::BASE . '/documents';
     private const CONNECT_REQUESTS = self::BASE . '/connect-requests';
+    private const BROADCAST = self::BASE . '/broadcast'; // POST — one plaintext message to every connection
     private const FLOWS = self::BASE . '/flows';          // POST /flows/{flowId}/runs
     private const FLOW_RUNS = self::BASE . '/flow-runs';  // list / get / answers / generate
     private const KEYS = '/api/keys';
@@ -967,6 +968,142 @@ final class Client
             throw new ApiError(0, 'company_connections.request_failed', 'no request_id in response');
         }
         return (string) $rid;
+    }
+
+    // ── messaging (company ↔ person) ────────────────────────────────────────────
+
+    /**
+     * Send a 1-on-1 message to the connected person → the new message_id.
+     *
+     * POST /api/company-data/connections/{connectionId}/messages. The message is end-to-end
+     * encrypted before it leaves the process: one copy for the PERSON (body) and one for the
+     * SERVICE (sender_body), so the person reads it in their app and this service can re-read its
+     * own outbound text. The platform stores ciphertext only. The route answers 201 with the
+     * created message carrying message_id — the boundary {@see self::markMessagesRead()} takes.
+     *
+     * {@code $personPublicKey} is the base64 SPKI carried on the message_received event — pass it
+     * to answer without a second key lookup. Without it the key is resolved from the connection's
+     * share_code (or an explicit {@code $shareCode}). Config-only key handling is unchanged: a
+     * recipient PUBLIC key is neither a secret nor a configured key.
+     *
+     * Refusals arrive as {@see ApiError} with the platform error_key:
+     * messages.messaging_not_entitled / messages.messaging_suspended / messages.not_connected
+     * (403), messages.encryption_required (400), messages.rate_limited (429).
+     *
+     * @throws ConfigError when the connection id or the text is blank.
+     * @throws ApiError when the API returns no message_id.
+     */
+    public function sendMessage(
+        string $connectionId,
+        string $text,
+        ?string $personPublicKey = null,
+        ?string $shareCode = null,
+    ): string {
+        $cid = trim($connectionId);
+        if ($cid === '') {
+            throw new ConfigError('connectionId is required');
+        }
+        if (trim($text) === '') {
+            throw new ConfigError('text is required');
+        }
+
+        if ($personPublicKey !== null && $personPublicKey !== '') {
+            $personKey = Crypto::loadPublicKey($personPublicKey);
+        } else {
+            $personKey = $this->recipientPublicKey($shareCode ?? $this->resolveShareCode($cid, null));
+        }
+
+        // Both copies travel as JSON STRINGS — the message columns are text and the API tells
+        // ciphertext from plaintext by looking for the wrapper marker.
+        $body = [
+            'body' => json_encode(
+                Crypto::encryptForPublicKey($text, $personKey),
+                JSON_THROW_ON_ERROR
+            ),
+            'sender_body' => json_encode(
+                Crypto::encryptForPublicKey($text, $this->servicePublicKey()),
+                JSON_THROW_ON_ERROR
+            ),
+        ];
+        $res = $this->http->post(self::CONNECTIONS . '/' . rawurlencode($cid) . '/messages', $body);
+        $mid = self::messageIdOf($res);
+        if ($mid === null) {
+            throw new ApiError(0, 'messages.send_failed', 'no message_id in response');
+        }
+        return $mid;
+    }
+
+    /**
+     * Send one PLAINTEXT message to every person connected to this service.
+     *
+     * POST /api/company-data/broadcast. A broadcast is deliberately not encrypted — one body
+     * cannot be single-key-encrypted to every connection — so it is the one message the platform
+     * can read, exactly as a broadcast document is. It seeds each recipient's ordinary 1-on-1
+     * thread, and a reply comes back end-to-end encrypted as a message_received event.
+     *
+     * Returns the API response. Refusals arrive as {@see ApiError}:
+     * messages.broadcast_audience_too_large (422, over the connection cap),
+     * messages.broadcast_suspended / messages.messaging_suspended /
+     * messages.messaging_not_entitled (403).
+     *
+     * @return array<string,mixed>|list<mixed>|string
+     *
+     * @throws ConfigError when the text is blank.
+     */
+    public function broadcastMessage(string $text): array|string
+    {
+        if (trim($text) === '') {
+            throw new ConfigError('text is required');
+        }
+
+        return $this->http->post(self::BROADCAST, ['body' => $text]);
+    }
+
+    /**
+     * Acknowledge the inbound messages this service has handled, up to a boundary.
+     *
+     * POST /api/company-data/connections/{connectionId}/messages/read with {up_to_message_id}.
+     * Only the person's messages on THIS connection at or before that message are marked read; one
+     * that arrived while the service was working stays unread, so nothing is swept unhandled.
+     * Idempotent — a repeat is a no-op.
+     *
+     * Sending a reply does NOT acknowledge anything; a service that never acks lets its unread
+     * grow. The boundary must be a message the PERSON sent on this connection: anything else is
+     * refused with {@see ApiError} company_data.ack_boundary_invalid (400).
+     *
+     * @throws ConfigError when the connection id or the boundary is blank.
+     */
+    public function markMessagesRead(string $connectionId, string $upToMessageId): void
+    {
+        $cid = trim($connectionId);
+        if ($cid === '') {
+            throw new ConfigError('connectionId is required');
+        }
+        $boundary = trim($upToMessageId);
+        if ($boundary === '') {
+            throw new ConfigError('upToMessageId is required');
+        }
+        $this->http->post(
+            self::CONNECTIONS . '/' . rawurlencode($cid) . '/messages/read',
+            ['up_to_message_id' => $boundary]
+        );
+    }
+
+    /**
+     * Pull the new message's id out of a send response — at the top level or nested under
+     * {@code message}, and under either {@code message_id} or {@code id}.
+     *
+     * @param array<string,mixed>|list<mixed>|string $body
+     */
+    private static function messageIdOf(array|string $body): ?string
+    {
+        $obj = is_array($body) ? $body : [];
+        if (isset($obj['message']) && is_array($obj['message'])) {
+            $obj = $obj['message'];
+        }
+        $mid = $obj['message_id'] ?? ($obj['id'] ?? null);
+
+        return ($mid === null || $mid === '') ? null : (string) $mid;
     }
 
     // ── contract-flow runs (company side — the company is a bound party) ─────────

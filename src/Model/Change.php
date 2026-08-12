@@ -54,6 +54,14 @@ final class Change
         public readonly ?string $requestId = null,
         /** Set on key_rotated — SHA-256 fingerprint of the person's NEW public key. */
         public readonly ?string $publicKeySha256 = null,
+        /** Set on message_received — the connection to reply/acknowledge on. */
+        public readonly ?string $connectionId = null,
+        /** Set on message_received — the ack boundary (upToMessageId). */
+        public readonly ?string $messageId = null,
+        /** Set on message_received — base64 SPKI to encrypt the reply to. */
+        public readonly ?string $personPublicKey = null,
+        /** Set on message_received — the DECRYPTED message text. */
+        public readonly ?string $messageBody = null,
         public readonly bool $verified = false,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
@@ -89,6 +97,21 @@ final class Change
 
         $personId = $obj['person_user_id'] ?? ($obj['person_id'] ?? null);
 
+        // message_received carries the connection to answer on, the ack boundary, the
+        // person's public key for the reply, and the message ciphertext itself; its
+        // created_at stays in $raw.
+        $isMessage = $event === 'message_received';
+        $messageBody = null;
+        if ($isMessage) {
+            // The message ciphertext is carried under `body`, never `value`: on every other
+            // event `value` means field ciphertext, which a message body is not. It is
+            // encrypted for the SERVICE key, so the ordinary decrypt opens it.
+            $cipher = $obj['body'] ?? null;
+            if (is_array($cipher) || is_string($cipher)) {
+                $messageBody = $decryptValue($cipher);
+            }
+        }
+
         return new self(
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             event: $event,
@@ -112,6 +135,11 @@ final class Change
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
             publicKeySha256: ($event === 'key_rotated' && isset($obj['public_key_sha256']))
                 ? (string) $obj['public_key_sha256'] : null,
+            connectionId: ($isMessage && isset($obj['connection_id'])) ? (string) $obj['connection_id'] : null,
+            messageId: ($isMessage && isset($obj['message_id'])) ? (string) $obj['message_id'] : null,
+            personPublicKey: ($isMessage && isset($obj['person_public_key']))
+                ? (string) $obj['person_public_key'] : null,
+            messageBody: $messageBody,
             verified: Value::verifiedFrom($obj, $value),
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
