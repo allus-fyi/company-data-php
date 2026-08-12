@@ -23,6 +23,17 @@ final class RequestField
         public readonly bool $mandatory,
         /** Which customer TYPE this row applies to: "person"|"company"|"both" (B2B); null on older API. */
         public readonly ?string $audience = null,
+        /**
+         * This row DEMANDS a verified answer: only a value the person verified satisfies it, and
+         * an unverified candidate is refused at the accepting act rather than downgraded.
+         */
+        public readonly bool $verified = false,
+        /**
+         * The oldest verification the demand accepts, in days; null = no age limit. Enforced at
+         * the accepting act only — a standing live link is not re-enforced afterwards, so apply
+         * your own policy from each {@see Value::$verifiedAt}.
+         */
+        public readonly ?int $verifiedMaxAgeDays = null,
         public readonly array $raw = [],
     ) {
     }
@@ -42,6 +53,8 @@ final class RequestField
                 || Coerce::bool($obj['mandatory_connected'] ?? null)
             ),
             audience: isset($obj['audience']) ? (string) $obj['audience'] : null,
+            verified: (bool) Coerce::bool($obj['verified'] ?? null),
+            verifiedMaxAgeDays: Coerce::int($obj['verified_max_age_days'] ?? null),
             raw: $obj,
         );
     }

@@ -62,7 +62,12 @@ final class Change
         public readonly ?string $personPublicKey = null,
         /** Set on message_received — the DECRYPTED message text. */
         public readonly ?string $messageBody = null,
+        /** True iff a field_updated value's hash matches AND the verification has not lapsed. */
         public readonly bool $verified = false,
+        /** When the answering field was verified; null when the value carries no verification. */
+        public readonly ?\DateTimeImmutable $verifiedAt = null,
+        /** When that verification lapses; null = it does not. Past → {@see $verified} reads false. */
+        public readonly ?\DateTimeImmutable $verifiedExpiresAt = null,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
     ) {
@@ -141,6 +146,8 @@ final class Change
                 ? (string) $obj['person_public_key'] : null,
             messageBody: $messageBody,
             verified: Value::verifiedFrom($obj, $value),
+            verifiedAt: Coerce::dateTime($obj['verified_at'] ?? null),
+            verifiedExpiresAt: Coerce::dateTime($obj['verified_expires_at'] ?? null),
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
         );

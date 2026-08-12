@@ -33,6 +33,35 @@ final class Coerce
         return (bool) $value;
     }
 
+    /** Coerce a JSON number or an XML numeric string into an int, or null when absent. */
+    public static function int(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $s = trim((string) $value);
+        return preg_match('~^-?\d+$~', $s) === 1 ? (int) $s : null;
+    }
+
+    /**
+     * Whether a verification expiry stamp has already passed.
+     *
+     * Absent → false: a verification with no expiry never lapses. Present but unparseable →
+     * true: an expiry that cannot be evaluated cannot be used to claim the value is still
+     * verified today.
+     */
+    public static function expiryPassed(mixed $value): bool
+    {
+        if ($value === null || $value === '') {
+            return false;
+        }
+        $when = self::dateTime($value);
+        if ($when === null) {
+            return true;
+        }
+        return $when <= new \DateTimeImmutable('now', $when->getTimezone());
+    }
+
     /**
      * Parse an API ISO-8601 timestamp into a DateTimeImmutable (tolerant of 'Z').
      */

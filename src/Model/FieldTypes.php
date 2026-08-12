@@ -12,8 +12,13 @@ final class FieldTypes
     /** Decrypted plaintext is a JSON object → a parsed assoc array. */
     public const STRUCTURED = ['address', 'bank', 'creditcard'];
 
-    /** Value is a lazy binary handle (served as a value_url). */
-    public const BINARY = ['photo', 'document', 'legal_document'];
+    /**
+     * Value is a lazy binary handle (served as a value_url). The ID-document subtypes are
+     * children of {@code legal_document} and share its envelope.
+     */
+    public const BINARY = [
+        'photo', 'document', 'legal_document', 'passport', 'photo_id', 'drivers_license',
+    ];
 
     /** Decrypted plaintext is an ISO date. */
     public const DATE = ['date', 'date_of_birth'];

@@ -22,7 +22,8 @@ use Allus\CompanyData\Errors\DecryptError;
  *   email/phone/url/text  → string
  *   address/bank/creditcard → array (the decrypted plaintext is a JSON object → parsed)
  *   date/date_of_birth    → DateTimeImmutable (falls back to the raw string)
- *   photo/document/legal_document → a lazy BinaryHandle
+ *   photo/document/legal_document + the ID-document subtypes passport/photo_id/drivers_license
+ *                                 → a lazy BinaryHandle
  */
 final class ValueTyping
 {

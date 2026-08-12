@@ -14,9 +14,11 @@ Returned by `$client->requestFields()`.
 final class RequestField {
     public readonly ?string $slug;   // the stable, company-set key — the contract for value access
     public readonly ?string $label;  // the human label (rename freely; the slug stays)
-    public readonly ?string $type;   // email|phone|url|text|address|bank|creditcard|date|date_of_birth|photo|document|legal_document
+    public readonly ?string $type;   // email|phone|url|text|address|bank|creditcard|date|date_of_birth|photo|document|legal_document|passport|photo_id|drivers_license
     public readonly bool   $oneTime; // a one-time snapshot vs a live (auto-updating) answer
     public readonly bool   $mandatory; // mandatory-to-provide OR mandatory-to-stay-connected (folded)
+    public readonly bool   $verified;  // this row DEMANDS a verified answer (mutually exclusive with $oneTime)
+    public readonly ?int   $verifiedMaxAgeDays; // oldest verification accepted; null = no age limit
     public readonly array  $raw;
 }
 ```
@@ -51,6 +53,9 @@ final class Value {
     public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value; // typed plaintext (see below)
     public readonly bool $live;                       // true = "keep connected" (auto-updates); false = one-time snapshot
     public readonly ?\DateTimeImmutable $updatedAt;   // when this answer last changed
+    public readonly bool $verified;                   // the hash recomputes over the plaintext AND the verification has not lapsed
+    public readonly ?\DateTimeImmutable $verifiedAt;        // when the answering field was verified
+    public readonly ?\DateTimeImmutable $verifiedExpiresAt; // when that verification lapses; null = it does not
     public readonly array $raw;
 }
 ```
@@ -62,7 +67,7 @@ final class Value {
 | `email`, `phone`, `url`, `text` | `string` | The decrypted plaintext. |
 | `address`, `bank`, `creditcard` | `array` | The decrypted plaintext is a JSON object → parsed. A non-JSON structured value throws `DecryptError`. |
 | `date`, `date_of_birth` | `DateTimeImmutable` | Parsed from ISO `YYYY-MM-DD` (the leading 10 chars), date-only at UTC midnight; falls back to the raw string if unparseable. |
-| `photo`, `document`, `legal_document` | `BinaryHandle` | Lazy — nothing fetched/decrypted until `->bytes()`/`->save()`. |
+| `photo`, `document`, `legal_document`, `passport`, `photo_id`, `drivers_license` | `BinaryHandle` | Lazy — nothing fetched/decrypted until `->bytes()`/`->save()`. The last three are ID-document subtypes of `legal_document` and share its envelope. |
 | unanswered / no value | `null` | The slot has no answer. |
 
 ## `BinaryHandle`
@@ -120,6 +125,9 @@ final class Change {
     public readonly ?string $messageId;       // message_received only — the ack boundary
     public readonly ?string $personPublicKey; // message_received only — base64 SPKI for the reply
     public readonly ?string $messageBody;     // message_received only — the DECRYPTED text
+    public readonly bool    $verified;  // field_updated only; hash recomputes AND the verification has not lapsed
+    public readonly ?\DateTimeImmutable $verifiedAt;        // when the answering field was verified
+    public readonly ?\DateTimeImmutable $verifiedExpiresAt; // when that verification lapses; null = it does not
     public readonly ?\DateTimeImmutable $at; // the change time (no separate updatedAt on a change)
     public readonly array   $raw;
 }

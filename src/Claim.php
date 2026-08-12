@@ -19,6 +19,11 @@ namespace Allus\CompanyData;
  * a type that can be attested (v1: `email`). Sending it on a `one_time` request is refused with
  * `invalid_request` — that leg carries no source row id, so the server could neither enforce the
  * requirement nor attest it, and an unhonourable requirement is refused rather than quietly dropped.
+ *
+ * `$verifiedMaxAgeDays` narrows that demand to a RECENT verification. The app's registered
+ * configuration is a FLOOR and a request may only TIGHTEN it: the effective limit is the minimum of
+ * the two stated ages, and an omitted age tightens nothing — which is why null sends nothing at all
+ * rather than an explicit null. Below 1 is refused at the call.
  */
 final class Claim
 {
@@ -31,6 +36,8 @@ final class Claim
         /** Only a verified answer satisfies this claim. OIDC flow + verifiable types only. */
         public readonly bool $verified = false,
         public readonly ?string $label = null,
+        /** Narrows `$verified` to a verification no older than this many days; null = no age limit. */
+        public readonly ?int $verifiedMaxAgeDays = null,
     ) {
     }
 }

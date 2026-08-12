@@ -11,6 +11,7 @@ use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\Response;
 use Allus\CompanyData\Http\Transport;
+use Allus\CompanyData\Model\Coerce;
 
 /**
  * "Sign in with allme" — the RP-side OAuth client.
@@ -26,7 +27,13 @@ final class OAuthClient
     /** The hosted consent surface. Native apps claim this https link; web is the fallback. */
     public const DEFAULT_AUTHORIZE_URL = 'https://web.allme.fyi/auth';
 
-    private const NON_CLAIMABLE = ['photo', 'document', 'legal_document'];
+    /**
+     * Binary field types can't be requested as claims — the ID-document subtypes are binary too,
+     * so no ID document ever reaches this surface.
+     */
+    private const NON_CLAIMABLE = [
+        'photo', 'document', 'legal_document', 'passport', 'photo_id', 'drivers_license',
+    ];
     private const MAX_CLAIMS = 15;
     private const MODES = ['signin', 'one_time', 'connect', '2fa_enroll'];
     private const RESPONSE_MODES = ['redirect', 'detached'];
@@ -133,6 +140,14 @@ final class OAuthClient
             if ($c->verified) {
                 $entry['verified'] = true;
             }
+            if ($c->verifiedMaxAgeDays !== null) {
+                // Refused HERE for the same reason a nameless claim is: the API rejects the whole
+                // request over it, and the integration error belongs at the call that made it.
+                if ($c->verifiedMaxAgeDays < 1) {
+                    throw new ConfigError("claim '{$name}': verifiedMaxAgeDays must be at least 1");
+                }
+                $entry['verified_max_age_days'] = $c->verifiedMaxAgeDays;
+            }
             if ($c->label !== null && $c->label !== '') {
                 $entry['label'] = $c->label;
             }
@@ -195,11 +210,14 @@ final class OAuthClient
      * §3.1a: `attestations` is an ADDITIVE sibling map, keyed by the SAME claim name as
      * `values`, present only for a `verified` claim under ENCRYPTED delivery. An integration that
      * never reads it behaves exactly as before. Each entry is
-     * `{verified: bool, hash: string, salt: string, verifiedAt: string}` — `verified` is recomputed
+     * `{verified: bool, hash: string, salt: string, verifiedAt: string, verifiedExpiresAt: ?string}` —
+     * `verified` is recomputed
      * BY THIS SDK in constant time over the plaintext it just decrypted, never passed through from
      * the server. **A `verified === false` entry means MISMATCH and you MUST reject the value.** A
      * claim ABSENT from `attestations` means "not attested" — never "wrong" — and must be treated as
-     * unverified. `verifiedAt` attests the value as verified AT THAT MOMENT, not verified today.
+     * unverified. `verifiedAt` attests the value as verified AT THAT MOMENT, not verified today;
+     * `verifiedExpiresAt` is when that verification lapses on its own (null = it does not), and an
+     * EXPIRED attestation is unverified — `verified` already reads false once it has passed.
      *
      * `values_cipher` is an ADDITIVE sibling of `values`, keyed by the same claim name: the RAW
      * app-key ciphertext wrapper `values` was decrypted from, exactly as delivered by userinfo. It
@@ -208,7 +226,7 @@ final class OAuthClient
      * empty for a claim/mode that carries no ciphertext (signin mode, or plaintext delivery, where
      * there is honestly nothing to show); never a placeholder standing in for "none returned".
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>}
      */
     public function completeSignIn(string $code, ?string $codeVerifier = null): array
     {
@@ -231,7 +249,7 @@ final class OAuthClient
      * Re-exchanging the code here would be wrong (a second exchange either mints a second grant or
      * fails outright), so this method never does the exchange — only the read + decrypt.
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>}
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>}
      */
     public function resolveUserinfo(string $accessToken, ?string $fallbackMode = null): array
     {
@@ -275,7 +293,7 @@ final class OAuthClient
      *
      * @param array<string,mixed> $raw
      * @param array<string,string> $values
-     * @return array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string}>
+     * @return array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>
      */
     private function decryptAttestations(array $raw, array $values): array
     {
@@ -305,13 +323,18 @@ final class OAuthClient
             if ($hash === '' || $salt === '') {
                 continue;
             }
+            $expiresAt = $decoded['verified_expires_at'] ?? null;
             $out[$slug] = [
                 // Recomputed here, constant-time, over the plaintext just decrypted — never trusted
                 // from the server. false = the delivered value is NOT the verified one; reject it.
-                'verified' => Crypto::hashMatches($salt, $hash, $values[$slug]),
+                // An attestation whose expiry has passed attests nothing today, so it reads false
+                // as well: an expired attestation is unverified, not "not attested".
+                'verified' => Crypto::hashMatches($salt, $hash, $values[$slug])
+                    && !Coerce::expiryPassed($expiresAt),
                 'hash' => $hash,
                 'salt' => $salt,
                 'verifiedAt' => (string) ($decoded['verified_at'] ?? ''),
+                'verifiedExpiresAt' => ($expiresAt === null || $expiresAt === '') ? null : (string) $expiresAt,
             ];
         }
 
