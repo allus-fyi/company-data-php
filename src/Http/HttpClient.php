@@ -20,6 +20,11 @@ use Allus\CompanyData\Util\Xml;
  *   to {@code {api_url}/oauth2/token} and caches the bearer token + its expiry.
  *   Refresh is automatic and transparent; a 401 mid-flight triggers exactly one
  *   refresh-and-retry, then surfaces as {@see AuthError}.
+ * - **Region** — the configured {@code api_url} is the starting point AND the
+ *   fallback: every response that can name a home base (the token response, a 421
+ *   refusal) rebases it, and the token request itself follows the rebase like every
+ *   other call — pinning it to the configured value would keep minting at a region a
+ *   client's company has left. See {@see rebaseTo}.
  * - **Format** — sets {@code Accept} per {@code config.format}
  *   ({@code application/json} or {@code application/xml}) and parses the body
  *   accordingly (the XML inverse mirrors the platform serializer; XXE-safe).
@@ -40,7 +45,17 @@ final class HttpClient
     private const DEFAULT_BACKOFF_S = 1.0;
     private const MAX_BACKOFF_S = 60.0;
 
-    private readonly string $apiUrl;
+    /** The response member (token success body and 421 refusal body alike) naming the home-region base. */
+    private const REGION_BASE_MEMBER = 'api_url';
+    /** The front door's refusal of a data route: rebase to the named base and replay. */
+    private const REBASE_ERROR_KEY = 'region.rebase_required';
+
+    /**
+     * The base every request goes to, including the token request. Starts at the configured
+     * value; every rebase moves it. Clients do not validate a server-returned base against
+     * anything — they store it and use it.
+     */
+    private string $apiUrl;
     private readonly Transport $transport;
     /** @var callable(float): void */
     private $sleep;
@@ -80,7 +95,14 @@ final class HttpClient
         return $this->token !== null && ($this->clock)() < $this->tokenExpiry;
     }
 
-    /** POST the client credentials to /oauth2/token and cache the result. */
+    /**
+     * POST the client credentials to /oauth2/token and cache the result.
+     *
+     * Goes to the CURRENT base, exactly like every other call — once a token response has
+     * named a home base, subsequent token requests go there too, the same as the data calls
+     * they sit beside. The configured value is only the starting point, for the first call of
+     * a process and the fallback when nothing has been stored yet.
+     */
     private function fetchToken(): string
     {
         $url = "{$this->apiUrl}/oauth2/token";
@@ -120,7 +142,34 @@ final class HttpClient
             : 3600.0;
         $this->token = $accessToken;
         $this->tokenExpiry = ($this->clock)() + max(0.0, $expiresIn - self::TOKEN_EXPIRY_SKEW_S);
+        // The token is minted at the client's home region and only validates there, so the
+        // base the response names is where every company-data call must go from here on.
+        $this->rebaseTo($body[self::REGION_BASE_MEMBER] ?? null);
         return $this->token;
+    }
+
+    // ── region ──────────────────────────────────────────────────────────────
+
+    /**
+     * Point subsequent requests — including the next token request — at {@code $candidate}.
+     *
+     * Returns {@code true} only when the base actually MOVED. A candidate that is absent,
+     * not a string, empty, or equal to the current base is not stored and yields
+     * {@code false}. Nothing here validates the candidate against a fetched region list: the
+     * SDK stores the base the server names and uses it, exactly as every first-party client
+     * does.
+     */
+    private function rebaseTo(mixed $candidate): bool
+    {
+        if (!is_string($candidate)) {
+            return false;
+        }
+        $base = rtrim(trim($candidate), '/');
+        if ($base === '' || $base === $this->apiUrl) {
+            return false;
+        }
+        $this->apiUrl = $base;
+        return true;
     }
 
     private function bearer(bool $forceRefresh = false): string
@@ -237,13 +286,15 @@ final class HttpClient
         bool $raw = false,
         bool $wantResponse = false,
     ): array|string|Response {
-        $url = $this->url($path);
         $wantsXml = $this->config->format === 'xml';
         $accept = $wantsXml ? 'application/xml' : 'application/json';
 
         $retries429 = 0;
         $refreshed401 = false;
+        $rebased421 = false;
         while (true) {
+            // Resolved per attempt: a 421 rebase moves the base under the next one.
+            $url = $this->url($path);
             $token = $this->bearer(false);
             $headers = [
                 'Authorization' => "Bearer {$token}",
@@ -286,6 +337,21 @@ final class HttpClient
                     . ($errorKey !== null ? " [{$errorKey}]" : '')
                     . ($message !== null ? ": {$message}" : '')
                 );
+            }
+
+            if ($status === 421) {
+                // The front door serves no data route: it names the caller's home base and
+                // expects the call there. Rebase once and replay; a second 421 surfaces.
+                [$errorKey, $message, $details] = $this->extractError($resp);
+                if (
+                    !$rebased421
+                    && $errorKey === self::REBASE_ERROR_KEY
+                    && $this->rebaseTo($details[self::REGION_BASE_MEMBER] ?? null)
+                ) {
+                    $rebased421 = true;
+                    continue;
+                }
+                throw new ApiError($status, $errorKey, $message, $details);
             }
 
             if ($status === 429) {
