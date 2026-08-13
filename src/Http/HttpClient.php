@@ -156,8 +156,7 @@ final class HttpClient
      * Returns {@code true} only when the base actually MOVED. A candidate that is absent,
      * not a string, empty, or equal to the current base is not stored and yields
      * {@code false}. Nothing here validates the candidate against a fetched region list: the
-     * SDK stores the base the server names and uses it, exactly as every first-party client
-     * does.
+     * SDK stores the base the server names and uses it.
      */
     private function rebaseTo(mixed $candidate): bool
     {
@@ -293,9 +292,11 @@ final class HttpClient
         $refreshed401 = false;
         $rebased421 = false;
         while (true) {
-            // Resolved per attempt: a 421 rebase moves the base under the next one.
-            $url = $this->url($path);
+            // Resolved per attempt, AFTER the bearer call: the first bearer() of a process
+            // mints the token and rebases from its response, so the base a fresh $token was
+            // just fetched under is the base this request must go to as well.
             $token = $this->bearer(false);
+            $url = $this->url($path);
             $headers = [
                 'Authorization' => "Bearer {$token}",
                 'Accept' => $accept,
@@ -377,12 +378,32 @@ final class HttpClient
         }
     }
 
+    /**
+     * Resolve {@code $path} against the CURRENT base. An already-absolute {@code $path} (the
+     * lazy binary handle's server-supplied {@code value_url}) is reduced to its path+query and
+     * rebuilt against the current base too — so a value_url minted before a rebase, or replayed
+     * on a 421 retry after one, still lands at the base every other request now uses.
+     */
     private function url(string $path): string
     {
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-            return $path;
+            $path = self::pathAndQuery($path);
         }
         return $this->apiUrl . (str_starts_with($path, '/') ? '' : '/') . $path;
+    }
+
+    /** The path + query (+ fragment) portion of an absolute URL, dropping its scheme and host. */
+    private static function pathAndQuery(string $absoluteUrl): string
+    {
+        $parts = parse_url($absoluteUrl);
+        $result = $parts['path'] ?? '/';
+        if (isset($parts['query'])) {
+            $result .= '?' . $parts['query'];
+        }
+        if (isset($parts['fragment'])) {
+            $result .= '#' . $parts['fragment'];
+        }
+        return $result;
     }
 
     /**
