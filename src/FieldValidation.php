@@ -27,6 +27,13 @@ final class FieldValidation
     private const PHONE_RE = '~^\+?\d{4,15}$~';
     private const CARD_RE = '~^\d{12,19}$~';
     private const DATE_RE = '~^\d{4}-\d{2}-\d{2}$~';
+    /** Numeric grammars accept ASCII digits only. */
+    private const INTEGER_RE = '~^-?[0-9]+$~';
+    /** decimal(10,2) is a FIXED shape: up to 8 integer digits + up to 2 decimal digits
+     * (10 significant digits total), never a per-field configurable precision. */
+    private const DECIMAL_RE = '~^-?[0-9]{1,8}(\.[0-9]{1,2})?$~';
+    /** Float accepts decimal or scientific notation. */
+    private const FLOAT_RE = '~^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$~';
 
     /** @var list<string> */
     private const GENDER = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
@@ -78,6 +85,7 @@ final class FieldValidation
         'address' => ['kind' => 'object'], 'creditcard' => ['kind' => 'object'], 'bank' => ['kind' => 'object'],
         'document' => ['kind' => 'object'], 'legal_document' => ['kind' => 'object'],
         'number' => ['kind' => 'number'], 'boolean' => ['kind' => 'boolean'],
+        'integer' => ['kind' => 'integer'], 'decimal' => ['kind' => 'decimal'], 'float' => ['kind' => 'float'],
         'country' => ['kind' => 'countryCode'], 'nationality' => ['kind' => 'countryCode'],
         // text + unknown => no rule => accept anything
     ];
@@ -136,6 +144,12 @@ final class FieldValidation
             case 'number':
                 $t = trim($value);
                 return $t !== '' && is_numeric($t) && is_finite((float) $t);
+            case 'integer':
+                return preg_match(self::INTEGER_RE, trim($value)) === 1;
+            case 'decimal':
+                return preg_match(self::DECIMAL_RE, trim($value)) === 1;
+            case 'float':
+                return preg_match(self::FLOAT_RE, trim($value)) === 1;
             case 'boolean':
                 return $value === 'true' || $value === 'false';
             case 'countryCode':
