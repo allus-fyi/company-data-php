@@ -898,7 +898,13 @@ final class Client
 
     /**
      * Set a document's lifecycle status
-     * (offering|ready_to_sign|active|active_but_ending|ended).
+     * (offering|ready_to_sign|active|active_but_ending|ended — `waiting` is a read-only status a
+     * contract-flow run stamps on an unsigned run-participant copy and is never a value to write).
+     *
+     * @throws ApiError `documents.run_managed` (409) when the document is a contract-flow
+     *                   run-participant document and its current status is `waiting`,
+     *                   `ready_to_sign` or `offering` — that status moves only through flow
+     *                   generation, the run's own advance, sign/accept, or a run cancel/decline.
      */
     public function updateDocumentStatus(string $documentId, string $status): Document
     {

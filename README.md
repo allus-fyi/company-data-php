@@ -537,6 +537,7 @@ $client->deleteDocument($documentId);                          // also removes t
 * `updateDocumentStatus` moves a document through its lifecycle (`offering` → `ready_to_sign` → `active` → `active_but_ending` → `ended`).
 * `updateDocumentMetadata` updates `name`, `description`, and/or `metadata` — pass at least one (else `ConfigError`).
 * `deleteDocument` deletes the document and its stored file.
+* A contract-flow-generated document can also read `waiting` — a run-participant copy whose signer has not been reached yet in the run's ordered signing plan. It is read-only: `updateDocumentStatus` throws with `error_key: 'documents.run_managed'` (409) if you try to write `status` on a run-participant document while it is `waiting`, `ready_to_sign` or `offering` — that status moves only through flow generation, the run's own advance, sign/accept, or a run cancel/decline. A run-participant document's `runSignatures` property carries the run's ordered signature summary.
 
 ### Reacting to a status change in the pump
 

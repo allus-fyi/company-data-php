@@ -43,6 +43,13 @@ final class Document
         public readonly bool $requiresAcceptance = false,
         /** @var array<int,array<string,mixed>> contract sign/accept audit trail (company-side reads only) */
         public readonly array $signatures = [],
+        /**
+         * @var array<int,array<string,mixed>>|null present only on a contract-flow run-participant
+         *      document: the run's ordered signature summary — one entry per participant owing an
+         *      act, each `{party_key, document_id, position, status, action, acted_at}`. Null on
+         *      any other document.
+         */
+        public readonly ?array $runSignatures = null,
         private $decryptValue = null,
         public readonly array $raw = [],
     ) {
@@ -105,6 +112,7 @@ final class Document
             requiresSignature: (bool) Coerce::bool($obj['requires_signature'] ?? null),
             requiresAcceptance: (bool) Coerce::bool($obj['requires_acceptance'] ?? null),
             signatures: is_array($obj['signatures'] ?? null) ? array_values(array_filter($obj['signatures'], 'is_array')) : [],
+            runSignatures: is_array($obj['run_signatures'] ?? null) ? array_values(array_filter($obj['run_signatures'], 'is_array')) : null,
             decryptValue: $decryptValue,
             raw: $obj,
         );

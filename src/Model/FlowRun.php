@@ -25,6 +25,7 @@ final class FlowRun
      * @param array<string,string>            $bindings
      * @param array<string,mixed>             $definition
      * @param list<array<string,mixed>>       $answers
+     * @param list<FlowRunParticipant>        $participants
      * @param array<string,mixed>             $raw
      */
     public function __construct(
@@ -44,6 +45,12 @@ final class FlowRun
         public readonly array $answers,
         public readonly ?\DateTimeImmutable $createdAt,
         public readonly ?\DateTimeImmutable $updatedAt,
+        /**
+         * Every party the run binds, the owning company included (flows.html §5a/§9 item 12).
+         * {@see $connectionId} above names only the PRIMARY counterparty, so a multi-actor run's
+         * other counterparties are reachable only here.
+         */
+        public readonly array $participants = [],
         public readonly array $raw = [],
     ) {
     }
@@ -103,6 +110,15 @@ final class FlowRun
             $outputMode = isset($definition['output_mode']) ? (string) $definition['output_mode'] : null;
         }
 
+        $participants = [];
+        if (is_array($obj['participants'] ?? null)) {
+            foreach ($obj['participants'] as $p) {
+                if (is_array($p)) {
+                    $participants[] = FlowRunParticipant::fromApi($p);
+                }
+            }
+        }
+
         return new self(
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             flowId: isset($obj['flow_id']) ? (string) $obj['flow_id'] : null,
@@ -120,6 +136,7 @@ final class FlowRun
             answers: $answers,
             createdAt: Coerce::dateTime($obj['created_at'] ?? null),
             updatedAt: Coerce::dateTime($obj['updated_at'] ?? null),
+            participants: $participants,
             raw: $obj,
         );
     }
