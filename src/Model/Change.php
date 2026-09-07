@@ -68,6 +68,13 @@ final class Change
         public readonly ?\DateTimeImmutable $verifiedAt = null,
         /** When that verification lapses; null = it does not. Past → {@see $verified} reads false. */
         public readonly ?\DateTimeImmutable $verifiedExpiresAt = null,
+        /**
+         * The proof metadata beside the binding — HOW it was bound, by WHOM, and the id to quote
+         * back to allme in a dispute. All three or none; readable whatever {@see $verified} says.
+         */
+        public readonly ?string $verifiedMethod = null,
+        public readonly ?string $verifiedProvider = null,
+        public readonly ?string $verificationId = null,
         public readonly ?\DateTimeImmutable $at = null,
         public readonly array $raw = [],
     ) {
@@ -148,6 +155,9 @@ final class Change
             verified: Value::verifiedFrom($obj, $value),
             verifiedAt: Coerce::dateTime($obj['verified_at'] ?? null),
             verifiedExpiresAt: Coerce::dateTime($obj['verified_expires_at'] ?? null),
+            verifiedMethod: Value::optString($obj['verified_method'] ?? null),
+            verifiedProvider: Value::optString($obj['verified_provider'] ?? null),
+            verificationId: Value::optString($obj['verification_id'] ?? null),
             at: Coerce::dateTime($obj['at'] ?? null),
             raw: $obj,
         );

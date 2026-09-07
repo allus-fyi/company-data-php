@@ -12,6 +12,7 @@ use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\Response;
 use Allus\CompanyData\Http\Transport;
 use Allus\CompanyData\Model\Coerce;
+use Allus\CompanyData\Model\Value;
 
 /**
  * "Sign in with allme" — the RP-side OAuth client.
@@ -210,7 +211,8 @@ final class OAuthClient
      * §3.1a: `attestations` is an ADDITIVE sibling map, keyed by the SAME claim name as
      * `values`, present only for a `verified` claim under ENCRYPTED delivery. An integration that
      * never reads it behaves exactly as before. Each entry is
-     * `{verified: bool, hash: string, salt: string, verifiedAt: string, verifiedExpiresAt: ?string}` —
+     * `{verified: bool, hash: string, salt: string, verifiedAt: string, verifiedExpiresAt: ?string,
+     * verifiedMethod: ?string, verifiedProvider: ?string, verificationId: ?string}` —
      * `verified` is recomputed
      * BY THIS SDK in constant time over the plaintext it just decrypted, never passed through from
      * the server. **A `verified === false` entry means MISMATCH and you MUST reject the value.** A
@@ -218,6 +220,10 @@ final class OAuthClient
      * unverified. `verifiedAt` attests the value as verified AT THAT MOMENT, not verified today;
      * `verifiedExpiresAt` is when that verification lapses on its own (null = it does not), and an
      * EXPIRED attestation is unverified — `verified` already reads false once it has passed.
+     * `verifiedMethod` / `verifiedProvider` / `verificationId` are the PROOF metadata read from the
+     * opened seal — HOW the value was bound, by WHOM, and the id to quote back to allme in a
+     * dispute. All three arrive together or not at all; a seal built before the proof log existed
+     * carries none of them and every one reads null.
      *
      * `values_cipher` is an ADDITIVE sibling of `values`, keyed by the same claim name: the RAW
      * app-key ciphertext wrapper `values` was decrypted from, exactly as delivered by userinfo. It
@@ -226,7 +232,7 @@ final class OAuthClient
      * empty for a claim/mode that carries no ciphertext (signin mode, or plaintext delivery, where
      * there is honestly nothing to show); never a placeholder standing in for "none returned".
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>}
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string,verifiedMethod:?string,verifiedProvider:?string,verificationId:?string}>}
      */
     public function completeSignIn(string $code, ?string $codeVerifier = null): array
     {
@@ -249,7 +255,7 @@ final class OAuthClient
      * Re-exchanging the code here would be wrong (a second exchange either mints a second grant or
      * fails outright), so this method never does the exchange — only the read + decrypt.
      *
-     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>}
+     * @return array{user:array<string,?string>,mode:?string,two_factor:bool,values:array<string,string>,values_cipher:array<string,mixed>,attestations:array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string,verifiedMethod:?string,verifiedProvider:?string,verificationId:?string}>}
      */
     public function resolveUserinfo(string $accessToken, ?string $fallbackMode = null): array
     {
@@ -293,7 +299,7 @@ final class OAuthClient
      *
      * @param array<string,mixed> $raw
      * @param array<string,string> $values
-     * @return array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string}>
+     * @return array<string,array{verified:bool,hash:string,salt:string,verifiedAt:string,verifiedExpiresAt:?string,verifiedMethod:?string,verifiedProvider:?string,verificationId:?string}>
      */
     private function decryptAttestations(array $raw, array $values): array
     {
@@ -335,6 +341,11 @@ final class OAuthClient
                 'salt' => $salt,
                 'verifiedAt' => (string) ($decoded['verified_at'] ?? ''),
                 'verifiedExpiresAt' => ($expiresAt === null || $expiresAt === '') ? null : (string) $expiresAt,
+                // Additive INSIDE the seal, and parse-permissive: a seal built before the proof
+                // log existed carries none of the three and every one reads null.
+                'verifiedMethod' => Value::optString($decoded['verified_method'] ?? null),
+                'verifiedProvider' => Value::optString($decoded['verified_provider'] ?? null),
+                'verificationId' => Value::optString($decoded['verification_id'] ?? null),
             ];
         }
 

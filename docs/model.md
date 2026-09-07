@@ -56,6 +56,9 @@ final class Value {
     public readonly bool $verified;                   // the hash recomputes over the plaintext AND the verification has not lapsed
     public readonly ?\DateTimeImmutable $verifiedAt;        // when the answering field was verified
     public readonly ?\DateTimeImmutable $verifiedExpiresAt; // when that verification lapses; null = it does not
+    public readonly ?string $verifiedMethod;   // HOW allme bound it: email_code|sms_code|sumsub_id|sumsub_address
+    public readonly ?string $verifiedProvider; // WHO established the proof: allme|sumsub
+    public readonly ?string $verificationId;   // the proof id to quote back to allme in a dispute
     public readonly array $raw;
 }
 ```
@@ -128,6 +131,9 @@ final class Change {
     public readonly bool    $verified;  // field_updated only; hash recomputes AND the verification has not lapsed
     public readonly ?\DateTimeImmutable $verifiedAt;        // when the answering field was verified
     public readonly ?\DateTimeImmutable $verifiedExpiresAt; // when that verification lapses; null = it does not
+    public readonly ?string $verifiedMethod;   // HOW allme bound it: email_code|sms_code|sumsub_id|sumsub_address
+    public readonly ?string $verifiedProvider; // WHO established the proof: allme|sumsub
+    public readonly ?string $verificationId;   // the proof id to quote back to allme in a dispute
     public readonly ?\DateTimeImmutable $at; // the change time (no separate updatedAt on a change)
     public readonly array   $raw;
 }

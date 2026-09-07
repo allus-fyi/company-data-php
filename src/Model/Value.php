@@ -36,6 +36,18 @@ final class Value
          * null = it does not lapse. Past → {@see $verified} reads false.
          */
         public readonly ?\DateTimeImmutable $verifiedExpiresAt = null,
+        /**
+         * HOW allme bound this value: `email_code` | `sms_code` | `sumsub_id` | `sumsub_address`;
+         * WHO established the proof: `allme` | `sumsub`; and the id to quote back to allme in a
+         * dispute.
+         *
+         * All three arrive together or not at all — a value bound before the proof log existed
+         * carries the four verification keys and none of these, so all three read null. They are
+         * readable whatever {@see $verified} says; that boolean stays the only trust decision.
+         */
+        public readonly ?string $verifiedMethod = null,
+        public readonly ?string $verifiedProvider = null,
+        public readonly ?string $verificationId = null,
         public readonly array $raw = [],
     ) {
     }
@@ -63,6 +75,9 @@ final class Value
             verified: self::verifiedFrom($obj, $typed),
             verifiedAt: Coerce::dateTime($obj['verified_at'] ?? null),
             verifiedExpiresAt: Coerce::dateTime($obj['verified_expires_at'] ?? null),
+            verifiedMethod: self::optString($obj['verified_method'] ?? null),
+            verifiedProvider: self::optString($obj['verified_provider'] ?? null),
+            verificationId: self::optString($obj['verification_id'] ?? null),
             raw: $obj,
         );
     }
@@ -91,5 +106,16 @@ final class Value
             return false;
         }
         return \Allus\CompanyData\Crypto\Crypto::hashMatches($vsalt, $vhash, $plaintext);
+    }
+
+    /**
+     * One additive string member, parse-permissively: absent or non-string reads as null.
+     *
+     * Shared with {@see Change} so the two models read the three proof members the same way — a
+     * second coercion here would be free to disagree with it about what an absent member means.
+     */
+    public static function optString(mixed $value): ?string
+    {
+        return is_string($value) && $value !== '' ? $value : null;
     }
 }
