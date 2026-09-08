@@ -93,6 +93,11 @@ but that is a convenience, not a remedy for switching mid-flow: the browser also
 your saved setup per origin, so a flow that returns to the other spelling lands on a
 page whose stored settings are simply not there.
 
+**Behind a TLS proxy.** The redirect URI's scheme follows the request too: `http`
+normally, or `https` when a TLS-terminating proxy sits in front of the example and
+forwards `X-Forwarded-Proto: https`. Register the OAuth app's redirect URI with
+whichever scheme your proxy actually presents to the browser.
+
 **Port.** `8091` is the default, overridable with the `PORT` env var
 (`PORT=8092 composer start`). The default is the **same across all six SDK
 examples** (one browser origin ⇒ your localStorage setup carries across SDKs), so
@@ -127,7 +132,8 @@ redirect URI matching the origin you open the portal on. The backend writes whic
 config file, so the two must match: use **`http://localhost:8091/callback`** when you
 browse from this machine and **`http://<your-lan-ip>:8091/callback`** when you drive
 the example from a phone (the startup output prints the exact address). Adjust the
-port if you set `PORT`.
+port if you set `PORT`. Behind a TLS proxy the scheme is `https` instead — register
+**`https://{host}/callback`** and make sure the proxy forwards `X-Forwarded-Proto: https`.
 
 For the **flow** scenario, import one of the two flow packages in `fixtures/` into
 the portal (service settings → Flows → Import) and **publish** it, then enter the

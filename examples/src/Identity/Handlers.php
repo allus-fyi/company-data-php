@@ -655,10 +655,23 @@ final class Handlers implements Family
     }
 
     /**
-     * The registered redirect URI: http://{host}/callback, host = the origin the browser actually used.
-     * Never falls back to a hardcoded host — `127.0.0.1` and `localhost` are DIFFERENT origins for
-     * redirect matching and for browser storage alike, so a substituted default drops the developer on an
-     * origin whose localStorage never held the setup and whose URI the OAuth app never registered.
+     * The scheme THIS request reached us on. There is no TLS termination in-process, so a TLS proxy in
+     * front of the example is the only source: the first comma-separated value of `X-Forwarded-Proto`,
+     * lowercased. Anything but `https` there — including an absent header — means `http`.
+     */
+    private static function requestScheme(): string
+    {
+        $raw = (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '');
+        $first = trim(strtolower(explode(',', $raw)[0]));
+        return $first === 'https' ? 'https' : 'http';
+    }
+
+    /**
+     * The registered redirect URI: {scheme}://{host}/callback, host = the origin the browser actually
+     * used and scheme = what it reached us on. Never falls back to a hardcoded host — `127.0.0.1` and
+     * `localhost` are DIFFERENT origins for redirect matching and for browser storage alike, so a
+     * substituted default drops the developer on an origin whose localStorage never held the setup and
+     * whose URI the OAuth app never registered.
      */
     private function redirectUri(): string
     {
@@ -666,7 +679,7 @@ final class Handlers implements Family
         if ($host === '') {
             throw new \RuntimeException(self::NO_ORIGIN);
         }
-        return 'http://' . $host . '/callback';
+        return self::requestScheme() . '://' . $host . '/callback';
     }
 
     /**
