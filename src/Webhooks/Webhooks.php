@@ -8,6 +8,7 @@ use Allus\CompanyData\Config;
 use Allus\CompanyData\Crypto\Crypto;
 use Allus\CompanyData\Errors\WebhookError;
 use Allus\CompanyData\Model\Change;
+use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Util\Xml;
 use phpseclib3\Crypt\PublicKeyLoader;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
@@ -133,6 +134,8 @@ final class Webhooks
      *
      * @param array<string,string> $headers
      * @param callable(string): ?string $typeForSlug
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      * @param RSAPrivateKey|null $accountKey pre-loaded (the Client caches it once); loaded on
@@ -145,6 +148,7 @@ final class Webhooks
         array $headers,
         Config $config,
         callable $typeForSlug,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
         ?RSAPrivateKey $accountKey = null,
@@ -154,7 +158,7 @@ final class Webhooks
             throw new WebhookError('webhook payload is not a JSON/XML object');
         }
         /** @var array<string,mixed> $payload */
-        return Change::fromApi($payload, $typeForSlug, $decryptValue, $binaryFetch);
+        return Change::fromApi($payload, $typeForSlug, $fieldTypes, $decryptValue, $binaryFetch);
     }
 
     /**
@@ -165,6 +169,8 @@ final class Webhooks
      *
      * @param array<string,string> $headers
      * @param callable(string): ?string $typeForSlug
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      *
@@ -175,6 +181,7 @@ final class Webhooks
         array $headers,
         Config $config,
         callable $typeForSlug,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
         ?RSAPrivateKey $accountKey = null,
@@ -182,7 +189,7 @@ final class Webhooks
         if (!self::verify($rawBody, $headers, $config)) {
             throw new WebhookError('webhook signature verification failed');
         }
-        return self::parse($rawBody, $headers, $config, $typeForSlug, $decryptValue, $binaryFetch, $accountKey);
+        return self::parse($rawBody, $headers, $config, $typeForSlug, $fieldTypes, $decryptValue, $binaryFetch, $accountKey);
     }
 
     /**

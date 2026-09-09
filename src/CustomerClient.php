@@ -11,6 +11,7 @@ use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\CustomerConnection;
 use Allus\CompanyData\Model\Document;
+use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Model\FlowRun;
 use Allus\CompanyData\Pump\Pump;
 use Allus\CompanyData\Webhooks\Webhooks;
@@ -37,6 +38,7 @@ final class CustomerClient
     private const CONSENTS = '/api/company-connections/consents';
     private const CUSTOMER_CHANGES = '/api/customer/changes';
     private const KEYS = '/api/keys';
+    private const FIELD_TYPES = '/api/contact-field-types';
 
     private readonly HttpClient $http;
     /** OAEP-SHA256 account key — decrypts document/field/change values (the person-value contract). */
@@ -66,6 +68,14 @@ final class CustomerClient
      * @var array<string,array<string,string>>
      */
     private array $requestTypeCache = [];
+    /**
+     * The field-type registry, fetched beside the request-field lookup and held for the life
+     * of the client. A type it does not carry triggers ONE refetch; a type a refetch still does
+     * not resolve is remembered in {@see $unresolvedTypes} and never asked for again.
+     */
+    private ?FieldTypes $fieldTypes = null;
+    /** @var array<string,bool> */
+    private array $unresolvedTypes = [];
     private ?Pump $pump = null;
 
     public function __construct(
@@ -340,8 +350,53 @@ final class CustomerClient
         return Change::fromApi(
             $event,
             static fn (string $slug): ?string => null,
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptAccount($w),
         );
+    }
+
+    /**
+     * The field-type registry — what every TYPE in a request catalog means.
+     *
+     * Fetched from {@code GET /api/contact-field-types} beside the connect-screen lookup this
+     * client resolves a request row's type from, and held in memory for the life of the client.
+     * It is what validates a typed answer before it is encrypted.
+     */
+    public function fieldTypes(): FieldTypes
+    {
+        return $this->fieldTypes ??= $this->loadFieldTypes();
+    }
+
+    /**
+     * One fetch of the registry rows, with no caching of its own. A failure is raised, never
+     * answered with an empty registry: "unknown accepts anything" is a verdict about the
+     * deployment and must not stand in for a fetch that did not happen.
+     */
+    private function loadFieldTypes(): FieldTypes
+    {
+        // The registry route answers JSON to every caller — it is not one of the customer routes
+        // that honour the configured format — so its body is parsed as JSON whatever this client
+        // speaks elsewhere.
+        $body = $this->http->parseBody($this->http->getResponse(self::FIELD_TYPES), false);
+
+        return new FieldTypes(is_array($body) ? $body : []);
+    }
+
+    /**
+     * One bounded refetch for a type the held registry does not carry. The refetch replaces the
+     * held registry only once it has ARRIVED, so a refetch that fails leaves the rows already
+     * loaded standing rather than none at all.
+     */
+    private function ensureTypeKnown(string $type): void
+    {
+        if ($this->fieldTypes()->knows($type) || isset($this->unresolvedTypes[$type])) {
+            return;
+        }
+        $refetched = $this->loadFieldTypes();
+        $this->fieldTypes = $refetched;
+        if (!$refetched->knows($type)) {
+            $this->unresolvedTypes[$type] = true;
+        }
     }
 
     public function processChanges(callable $handler, array $options = []): void
@@ -382,6 +437,7 @@ final class CustomerClient
             $headers,
             $this->config,
             static fn (string $slug): ?string => null,
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptAccount($w),
             null,
             $this->accountEnvelopeKey,
@@ -396,6 +452,7 @@ final class CustomerClient
             $headers,
             $this->config,
             static fn (string $slug): ?string => null,
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptAccount($w),
             null,
             $this->accountEnvelopeKey,
@@ -467,8 +524,11 @@ final class CustomerClient
         foreach ($answers as $a) {
             $plain = (string) $a['value'];
             $ftype = $types[(string) $a['request_field_id']] ?? null;
-            if ($ftype !== null && !FieldValidation::isFieldValueValid($ftype, $plain)) {
-                throw new ValidationError((string) $a['request_field_id'], $ftype);
+            if ($ftype !== null) {
+                $this->ensureTypeKnown($ftype);
+                if (!$this->fieldTypes()->isFieldValueValid($ftype, $plain)) {
+                    throw new ValidationError((string) $a['request_field_id'], $ftype);
+                }
             }
             $out[] = [
                 'request_field_id' => $a['request_field_id'],

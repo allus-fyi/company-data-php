@@ -16,6 +16,7 @@ use Allus\CompanyData\Http\HttpClient;
 use Allus\CompanyData\Model\Change;
 use Allus\CompanyData\Model\Connection;
 use Allus\CompanyData\Model\Document;
+use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Model\FlowRun;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\RequestField;
@@ -56,7 +57,12 @@ use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
  *   decrypt closure over it is handed to every model factory and the pump
  *   (config-only key handling — the key never appears in a method signature).
  * - **Slug catalog** — requestFields() is fetched once and cached; its slug→type
- *   map types every value.
+ *   map names the TYPE of every value.
+ * - **Field-type registry** — fieldTypes() is fetched beside the catalog and held
+ *   for the life of the client; it is what a type MEANS, so a value's shape follows
+ *   the type's resolved primitive and storage lane (a composite parses to an array,
+ *   a photo/document lane becomes a lazy binary handle) rather than a list of type
+ *   names. A type the held registry does not carry triggers one bounded refetch.
  * - **Binary** — a value's {@see \Allus\CompanyData\Crypto\BinaryHandle::bytes()}
  *   GETs the slot file endpoint, unwraps the API's
  *   {@code {"encrypted":true,"value":<wrapper>}}, and runs the same service-key
@@ -69,6 +75,7 @@ final class Client
     private const CONNECTIONS = self::BASE . '/connections';
     private const CHANGES = self::BASE . '/changes';
     private const REQUEST_FIELDS = self::BASE . '/request-fields';
+    private const FIELD_TYPES = '/api/contact-field-types';
     private const LOGS = self::BASE . '/logs';
     private const DOCUMENTS = self::BASE . '/documents';
     private const CONNECT_REQUESTS = self::BASE . '/connect-requests';
@@ -92,10 +99,31 @@ final class Client
     private readonly RSAPrivateKey $privateKey;
     private readonly ?RSAPrivateKey $accountKey;
 
-    /** @var list<RequestField>|null */
+    /**
+     * The slug catalog, fetched once and held for the life of the client. A slug it does
+     * not carry — a request slot configured after this client started — triggers ONE
+     * refetch; a slug a refetch still does not carry is remembered in
+     * {@see $unresolvedSlugs} and never asked for again, so a slot this deployment does
+     * not have cannot turn every later value into a round trip.
+     *
+     * @var list<RequestField>|null
+     */
     private ?array $requestFields = null;
     /** @var array<string,?string> */
     private array $typeBySlug = [];
+    /** @var array<string,bool> */
+    private array $unresolvedSlugs = [];
+
+    /**
+     * The field-type registry, fetched beside the catalog and held for the life of the
+     * client. A type it does not carry triggers ONE refetch; a type a refetch still does
+     * not resolve is remembered in {@see $unresolvedTypes} and never asked for again, so a
+     * value of a type this deployment does not have cannot turn every later value into a
+     * round trip.
+     */
+    private ?FieldTypes $fieldTypes = null;
+    /** @var array<string,bool> */
+    private array $unresolvedTypes = [];
 
     private ?Pump $pump = null;
 
@@ -239,13 +267,70 @@ final class Client
         );
     }
 
-    /** Resolve a request slug to its field type (loads the catalog once). */
+    /**
+     * Resolve a request slug to its field type (loads the catalog once).
+     *
+     * The payload is the trigger, in two legs. The SLUG a value or a change names is what
+     * the held catalog may not carry, and no walk of that catalog can discover it; the slug
+     * itself asks for one catalog refetch. Only then can the type be read, and a type the
+     * held registry does not carry asks for one registry refetch. Both legs are bounded and
+     * both remember their misses.
+     */
     private function typeForSlug(string $slug): ?string
     {
         if ($this->requestFields === null) {
             $this->requestFields();
         }
-        return $this->typeBySlug[$slug] ?? null;
+        if (!array_key_exists($slug, $this->typeBySlug)) {
+            $this->ensureSlugKnown($slug);
+        }
+        $type = $this->typeBySlug[$slug] ?? null;
+        if ($type !== null && $type !== '') {
+            $this->ensureTypeKnown($type);
+        }
+        return $type;
+    }
+
+    /**
+     * One bounded refetch for a slug the held catalog does not carry.
+     *
+     * A request slot configured after this client started is what makes a slug unknown
+     * here, and one refetch of the catalog is what resolves it — together with the type
+     * that slot introduced, which {@see typeForSlug} then puts through the registry heal. A
+     * slug still absent afterwards belongs to no slot this client can see, so it is
+     * remembered and never asked for again.
+     */
+    private function ensureSlugKnown(string $slug): void
+    {
+        if (array_key_exists($slug, $this->typeBySlug) || isset($this->unresolvedSlugs[$slug])) {
+            return;
+        }
+        $this->loadRequestFields();
+        if (!array_key_exists($slug, $this->typeBySlug)) {
+            $this->unresolvedSlugs[$slug] = true;
+        }
+    }
+
+    /**
+     * One bounded refetch for a type the held registry does not carry.
+     *
+     * A row added to the registry after this client started is what makes a type unknown
+     * here, and one refetch is what resolves it. A type still absent afterwards is this
+     * deployment's answer, not a stale cache, so it is remembered and never asked for again.
+     */
+    private function ensureTypeKnown(string $type): void
+    {
+        if ($this->fieldTypes()->knows($type) || isset($this->unresolvedTypes[$type])) {
+            return;
+        }
+        // The refetch replaces the held registry only once it has ARRIVED. Clearing first would
+        // let a failed refetch leave no registry at all, and every type would then read as
+        // unknown — a verdict about the deployment standing in for a fetch that did not happen.
+        $refetched = $this->loadFieldTypes();
+        $this->fieldTypes = $refetched;
+        if (!$refetched->knows($type)) {
+            $this->unresolvedTypes[$type] = true;
+        }
     }
 
     // ── 2FA-by-allme ───────────────────────────────────────────────────────────────
@@ -271,18 +356,53 @@ final class Client
     public function requestFields(): array
     {
         if ($this->requestFields === null) {
-            $body = $this->http->get(self::REQUEST_FIELDS);
-            $fields = RequestField::listFromApi(is_array($body) ? $body : []);
-            $this->requestFields = $fields;
-            $map = [];
-            foreach ($fields as $f) {
-                if ($f->slug !== null) {
-                    $map[$f->slug] = $f->type;
-                }
-            }
-            $this->typeBySlug = $map;
+            $this->loadRequestFields();
         }
         return $this->requestFields;
+    }
+
+    /** One fetch of the catalog, replacing the held one only once it has ARRIVED. */
+    private function loadRequestFields(): void
+    {
+        $body = $this->http->get(self::REQUEST_FIELDS);
+        $fields = RequestField::listFromApi(is_array($body) ? $body : []);
+        $map = [];
+        foreach ($fields as $f) {
+            if ($f->slug !== null) {
+                $map[$f->slug] = $f->type;
+            }
+        }
+        $this->requestFields = $fields;
+        $this->typeBySlug = $map;
+    }
+
+    /**
+     * The field-type registry — what every TYPE in the catalog means.
+     *
+     * Fetched from {@code GET /api/contact-field-types} beside the request-field catalog and
+     * held in memory for the life of the client. It says which primitive draws a type, which
+     * named check verifies it, which regexes it adds, which sub-fields it carries and on which
+     * storage lane its value lives — so a value's shape and a value's validity both follow the
+     * served rows rather than a list of type names.
+     */
+    public function fieldTypes(): FieldTypes
+    {
+        return $this->fieldTypes ??= $this->loadFieldTypes();
+    }
+
+    /**
+     * One fetch of the registry rows, with no caching of its own. A failure is raised, never
+     * answered with an empty registry: "unknown accepts anything" is a verdict about the
+     * deployment and must not stand in for a fetch that did not happen.
+     */
+    private function loadFieldTypes(): FieldTypes
+    {
+        // The registry route answers JSON to every caller — it is not one of the company-data
+        // routes that honour the configured format — so its body is parsed as JSON whatever this
+        // client speaks elsewhere.
+        $body = $this->http->parseBody($this->http->getResponse(self::FIELD_TYPES), false);
+
+        return new FieldTypes(is_array($body) ? $body : []);
     }
 
     // ── connections (heavily rate-limited — initial sync / reconciliation) ─────
@@ -324,6 +444,7 @@ final class Client
                 yield Connection::fromApi(
                     $obj,
                     fn (string $slug): ?string => $this->typeForSlug($slug),
+                    fn (): FieldTypes => $this->fieldTypes(),
                     fn (array|string $w): string => $this->decryptValue($w),
                     fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
                     // The list row carries identity AND the values map.
@@ -389,6 +510,7 @@ final class Client
         return Connection::fromApi(
             $obj,
             fn (string $slug): ?string => $this->typeForSlug($slug),
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptValue($w),
             fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
         );
@@ -503,6 +625,7 @@ final class Client
         return Change::fromApi(
             $event,
             fn (string $slug): ?string => $this->typeForSlug($slug),
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptValue($w),
             fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
         );
@@ -591,6 +714,7 @@ final class Client
             $headers,
             $this->config,
             fn (string $slug): ?string => $this->typeForSlug($slug),
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptValue($w),
             fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             $this->accountKey, // cached once; no per-webhook PBKDF2
@@ -609,6 +733,7 @@ final class Client
             $headers,
             $this->config,
             fn (string $slug): ?string => $this->typeForSlug($slug),
+            fn (): FieldTypes => $this->fieldTypes(),
             fn (array|string $w): string => $this->decryptValue($w),
             fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             $this->accountKey, // cached once; no per-webhook PBKDF2
@@ -1293,9 +1418,23 @@ final class Client
             // Validate the plaintext against the field's declared type (resolved from the
             // pinned flow definition) before it is encrypted. A slug with no field element in the
             // graph resolves to null → skipped (do not invent a type).
-            $ftype = self::flowFieldType($run->definition, (string) $slug);
-            if ($ftype !== null && !FieldValidation::isFieldValueValid($ftype, $plain)) {
-                throw new ValidationError((string) $slug, $ftype);
+            $element = self::flowFieldElement($run->definition, (string) $slug);
+            $ftype = ($element !== null && isset($element['field_type']))
+                ? (string) $element['field_type']
+                : null;
+            if ($element !== null && $ftype !== null) {
+                // The type is named by the pinned definition — a payload, not the request catalog
+                // — so it can be one the held registry has never seen. One bounded refetch
+                // resolves it; a type still absent afterwards validates as unknown, which accepts
+                // anything.
+                $this->ensureTypeKnown($ftype);
+                // A choice type whose ROW carries no options takes them from the ELEMENT, which is
+                // the only place they exist for select/multiselect. Passing them is what lets the
+                // answer be validated at all instead of being measured against an empty domain.
+                $options = self::flowFieldOptions($element);
+                if (!$this->fieldTypes()->isFieldValueValid($ftype, $plain, $options)) {
+                    throw new ValidationError((string) $slug, $ftype);
+                }
             }
             $values = [];
             foreach ($run->bindings as $uid) {
@@ -1557,13 +1696,14 @@ final class Client
     }
 
     /**
-     * Resolve a fill slug to its {@code field_type} from the pinned flow graph. Scans every
-     * node's {@code elements} for a {@code kind='field'} element with a matching {@code slug}. Returns
+     * Resolve a fill slug to its field ELEMENT in the pinned flow graph. Scans every node's
+     * {@code elements} for a {@code kind='field'} element with a matching {@code slug}. Returns
      * null when the slug has no field element (skip validation — never invent a type).
      *
      * @param array<string,mixed> $definition
+     * @return ?array<string,mixed>
      */
-    private static function flowFieldType(array $definition, string $slug): ?string
+    private static function flowFieldElement(array $definition, string $slug): ?array
     {
         $nodes = $definition['nodes'] ?? null;
         if (!is_array($nodes)) {
@@ -1575,10 +1715,36 @@ final class Client
             }
             foreach ($n['elements'] as $el) {
                 if (is_array($el) && ($el['kind'] ?? null) === 'field' && ($el['slug'] ?? null) === $slug) {
-                    return isset($el['field_type']) ? (string) $el['field_type'] : null;
+                    return $el;
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * The option VALUES a flow field element supplies.
+     *
+     * An element's options are {@code {value, label, available_if?}} objects; the value is the
+     * domain member. null when the element carries none, which leaves the row's own options — if
+     * it has any — to govern.
+     *
+     * @param array<string,mixed> $element
+     * @return ?list<string>
+     */
+    private static function flowFieldOptions(array $element): ?array
+    {
+        $raw = $element['options'] ?? null;
+        if (!is_array($raw)) {
+            return null;
+        }
+        $values = [];
+        foreach ($raw as $option) {
+            if (is_array($option) && isset($option['value'])) {
+                $values[] = (string) $option['value'];
+            }
+        }
+
+        return $values === [] ? null : $values;
     }
 }

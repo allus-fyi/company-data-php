@@ -18,17 +18,22 @@ use Allus\CompanyData\Errors\DecryptError;
  * {@code decryptValue} callable (a closure over the loaded service private key)
  * and, for binaries, a {@code binaryFetch} callable — never a key/secret argument.
  *
- * Type → PHP value:
- *   email/phone/url/text  → string
- *   address/bank/creditcard → array (the decrypted plaintext is a JSON object → parsed)
- *   date/date_of_birth    → DateTimeImmutable (falls back to the raw string)
- *   photo/document/legal_document + the ID-document subtypes passport/photo_id/drivers_license
- *                                 → a lazy BinaryHandle
+ * The shape comes from the type's RESOLVED definition in the served registry
+ * ({@see FieldTypes}) — its storage lane and its primitive — so a type added to the
+ * registry types itself from the day it is a row:
+ *   storage lane photo/document → a lazy BinaryHandle
+ *   primitive composite         → array (the decrypted plaintext is a JSON object → parsed)
+ *   primitive multilist         → array (a JSON array of option strings)
+ *   primitive date              → DateTimeImmutable (falls back to the raw string)
+ *   everything else             → string
  */
 final class ValueTyping
 {
     /**
      * @param array<string,mixed> $obj         one hardened {value|value_url, live, updatedAt} entry.
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE: resolving a
+     *        slug is what heals the registry, so a factory handed the registry itself would hold the one
+     *        from BEFORE the heal and type the very value that triggered it against rows without its type.
      * @param callable(array<string,mixed>|string): string $decryptValue closure over the service key.
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch slot file fetch.
      *
@@ -39,13 +44,16 @@ final class ValueTyping
     public static function typed(
         array $obj,
         ?string $fieldType,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
     ): string|array|\DateTimeImmutable|BinaryHandle|null {
         $ftype = strtolower($fieldType ?? '');
+        $registry = $fieldTypes();
+        $definition = $registry->resolve($ftype);
 
         // Binary → a lazy handle over the slot value_url (no eager fetch/decrypt).
-        if (in_array($ftype, FieldTypes::BINARY, true) || array_key_exists('value_url', $obj)) {
+        if ($registry->isBinary($ftype) || array_key_exists('value_url', $obj)) {
             $valueUrl = $obj['value_url'] ?? null;
             if ($valueUrl === null) {
                 // Binary type but no url (e.g. unanswered) → an empty handle.
@@ -66,7 +74,7 @@ final class ValueTyping
         $ciphertext = $obj['value'];
         $plaintext = $decryptValue($ciphertext);
 
-        if (in_array($ftype, FieldTypes::STRUCTURED, true)) {
+        if ($definition['input'] === 'composite' || $definition['input'] === 'multilist') {
             try {
                 $parsed = json_decode($plaintext, true, flags: JSON_THROW_ON_ERROR);
             } catch (\JsonException $e) {
@@ -75,12 +83,12 @@ final class ValueTyping
             return is_array($parsed) ? $parsed : ['value' => $parsed];
         }
 
-        if (in_array($ftype, FieldTypes::DATE, true)) {
+        if ($definition['input'] === 'date') {
             $d = Coerce::date($plaintext);
             return $d ?? $plaintext;
         }
 
-        // text/email/phone/url and anything unknown → the plaintext string.
+        // Every other primitive, and a type the registry does not carry, is the plaintext string.
         return $plaintext;
     }
 }

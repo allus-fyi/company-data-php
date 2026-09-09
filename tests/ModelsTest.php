@@ -113,7 +113,7 @@ final class ModelsTest extends TestCase
         ];
         $identity = ['display_name' => 'Anna', 'connected_at' => '2026-06-10T00:00:00Z'];
 
-        $conn = Connection::fromApi($detail, $this->typeResolver(), $this->decryptValue(), identity: $identity);
+        $conn = Connection::fromApi($detail, $this->typeResolver(), Support\FakeTransport::fieldTypes(...), $this->decryptValue(), identity: $identity);
 
         self::assertSame('csc-1', $conn->id);
         self::assertSame('person-1', $conn->personId);
@@ -158,7 +158,7 @@ final class ModelsTest extends TestCase
                 ],
             ],
         ];
-        $conn = Connection::fromApi($detail, fn (string $s): ?string => 'photo', $this->decryptValue(), $fetch);
+        $conn = Connection::fromApi($detail, fn (string $s): ?string => 'photo', Support\FakeTransport::fieldTypes(...), $this->decryptValue(), $fetch);
         $handle = $conn->values['logo']->value;
         self::assertInstanceOf(BinaryHandle::class, $handle);
         self::assertArrayNotHasKey('url', $captured); // not fetched until ->bytes()
@@ -176,7 +176,7 @@ final class ModelsTest extends TestCase
             'user_id' => 'person-1',
             'values' => ['work_email' => ['value' => self::$vector['text']['wrapper'], 'live' => true]],
         ];
-        $conn = Connection::fromApi($detail, fn (string $s): ?string => 'email', $this->decryptValue());
+        $conn = Connection::fromApi($detail, fn (string $s): ?string => 'email', Support\FakeTransport::fieldTypes(...), $this->decryptValue());
         $serialized = json_encode($conn->raw, JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('field_id', $serialized);
         self::assertSame(['work_email'], array_keys($conn->values));
@@ -197,7 +197,7 @@ final class ModelsTest extends TestCase
                 'at' => '2026-06-17T12:05:00Z',
             ],
         ]];
-        $changes = Change::listFromApi($body, fn (string $s): ?string => 'email', $this->decryptValue());
+        $changes = Change::listFromApi($body, fn (string $s): ?string => 'email', Support\FakeTransport::fieldTypes(...), $this->decryptValue());
 
         $f = $changes[0];
         self::assertSame('chg-42', $f->id);
@@ -229,7 +229,7 @@ final class ModelsTest extends TestCase
             encrypted: true,
             wrapper: self::$vector['binary']['wrapper'],
         );
-        $changes = Change::listFromApi($body, fn (string $s): ?string => 'photo', $this->decryptValue(), $fetch);
+        $changes = Change::listFromApi($body, fn (string $s): ?string => 'photo', Support\FakeTransport::fieldTypes(...), $this->decryptValue(), $fetch);
         $chg = $changes[0];
         self::assertInstanceOf(BinaryHandle::class, $chg->value);
         self::assertSame(self::$vector['binary']['inner_full_sha256'], hash('sha256', $chg->value->bytes()));
@@ -241,7 +241,7 @@ final class ModelsTest extends TestCase
             'id' => 'chg-9', 'event' => 'consent_accepted', 'person_user_id' => 'p',
             'slug' => 'work_email', 'at' => '2026-06-17T00:00:00Z',
         ]]];
-        $changes = Change::listFromApi($body, fn (string $s): ?string => 'email', fn (array|string $w): string => '');
+        $changes = Change::listFromApi($body, fn (string $s): ?string => 'email', Support\FakeTransport::fieldTypes(...), fn (array|string $w): string => '');
         $chg = $changes[0];
         self::assertSame('consent_accepted', $chg->event);
         self::assertSame('work_email', $chg->slug);
@@ -278,7 +278,7 @@ final class ModelsTest extends TestCase
             ['id' => 'chg-2', 'event' => 'connection_created',
              'person_user_id' => 'person-2', 'at' => '2026-06-17T12:00:00Z'], // no share_code -> null
         ]];
-        $changes = Change::listFromApi($body, fn (string $s): ?string => null, $this->decryptValue());
+        $changes = Change::listFromApi($body, fn (string $s): ?string => null, Support\FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('ABC123', $changes[0]->shareCode);
         self::assertNull($changes[1]->shareCode);
     }
@@ -304,7 +304,7 @@ final class ModelsTest extends TestCase
             ['id' => 'chg-2', 'event' => 'connection_created',
              'person_user_id' => 'person-2', 'at' => '2026-07-07T12:00:00Z'],
         ]];
-        $changes = Change::listFromApi($body, fn (string $s): ?string => null, $this->decryptValue());
+        $changes = Change::listFromApi($body, fn (string $s): ?string => null, Support\FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('company', $changes[0]->customerType);
         self::assertNull($changes[1]->customerType);
     }
@@ -314,13 +314,13 @@ final class ModelsTest extends TestCase
         // B2B: a connection carries customer_type + share_code (both nullable).
         $obj = ['connection_id' => 'c-1', 'user_id' => 'co-9',
                 'customer_type' => 'company', 'share_code' => 'PARTNER', 'values' => []];
-        $conn = Connection::fromApi($obj, fn (string $s): ?string => null, $this->decryptValue());
+        $conn = Connection::fromApi($obj, fn (string $s): ?string => null, Support\FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('company', $conn->customerType);
         self::assertSame('PARTNER', $conn->shareCode);
 
         $bare = Connection::fromApi(
             ['connection_id' => 'c-2', 'user_id' => 'p-1', 'values' => []],
-            fn (string $s): ?string => null,
+            fn (string $s): ?string => null, Support\FakeTransport::fieldTypes(...),
             $this->decryptValue(),
         );
         self::assertNull($bare->customerType);

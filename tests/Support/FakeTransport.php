@@ -58,6 +58,12 @@ final class FakeTransport implements Transport
     public function get(string $url, ?array $query, array $headers): Response
     {
         $this->gets[] = ['url' => $url, 'query' => $query, 'headers' => $headers];
+        // The registry route is served the way a deployment serves it: the client fetches it
+        // beside the request-field catalog, and a fake that did not answer it would be testing an
+        // environment no deployment has.
+        if (str_ends_with($url, '/api/contact-field-types')) {
+            return self::json(200, self::fieldTypeRows());
+        }
         if ($this->getRouter !== null) {
             return ($this->getRouter)($url, $query);
         }
@@ -75,6 +81,28 @@ final class FakeTransport implements Transport
             return ($this->writeRouter)($method, $url, $body, $headers);
         }
         return self::json(200, []);
+    }
+
+    /**
+     * The vector's own registry rows — the same body a deployment serves.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public static function fieldTypeRows(): array
+    {
+        static $rows = null;
+        if ($rows === null) {
+            $raw = file_get_contents(__DIR__ . '/../../testdata/contract-field-validation-vector.json');
+            $rows = json_decode((string) $raw, true, flags: JSON_THROW_ON_ERROR)['registry'];
+        }
+        return $rows;
+    }
+
+    /** The vector's registry, which every model test types its values against. */
+    public static function fieldTypes(): \Allus\CompanyData\Model\FieldTypes
+    {
+        static $registry = null;
+        return $registry ??= new \Allus\CompanyData\Model\FieldTypes(self::fieldTypeRows());
     }
 
     // ── response builders ───────────────────────────────────────────────────

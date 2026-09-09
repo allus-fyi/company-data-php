@@ -56,18 +56,21 @@ final class Value
      * Build a typed Value from one hardened {value|value_url, live, updatedAt} entry.
      *
      * @param array<string,mixed> $obj
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      */
     public static function fromApi(
         array $obj,
         ?string $fieldType,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
     ): self {
         $live = (bool) Coerce::bool($obj['live'] ?? null);
         $updatedAt = Coerce::dateTime($obj['updatedAt'] ?? ($obj['updated_at'] ?? null));
-        $typed = ValueTyping::typed($obj, $fieldType, $decryptValue, $binaryFetch);
+        $typed = ValueTyping::typed($obj, $fieldType, $fieldTypes, $decryptValue, $binaryFetch);
         return new self(
             value: $typed,
             live: $live,

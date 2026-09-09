@@ -22,11 +22,11 @@ final class VerifiedTest extends TestCase
     {
         $salt = '0011223344556677'; $pt = 'alice@example.com';
         $dec = fn($w) => $pt;
-        $match = Value::fromApi(['value' => $pt, 'live' => true, 'verified_hash' => $this->h($salt, $pt), 'verified_salt' => $salt], 'email', $dec);
+        $match = Value::fromApi(['value' => $pt, 'live' => true, 'verified_hash' => $this->h($salt, $pt), 'verified_salt' => $salt], 'email', Support\FakeTransport::fieldTypes(...), $dec);
         $this->assertTrue($match->verified);
-        $mismatch = Value::fromApi(['value' => $pt, 'live' => true, 'verified_hash' => 'deadbeef', 'verified_salt' => $salt], 'email', $dec);
+        $mismatch = Value::fromApi(['value' => $pt, 'live' => true, 'verified_hash' => 'deadbeef', 'verified_salt' => $salt], 'email', Support\FakeTransport::fieldTypes(...), $dec);
         $this->assertFalse($mismatch->verified);
-        $absent = Value::fromApi(['value' => $pt, 'live' => true], 'email', $dec);
+        $absent = Value::fromApi(['value' => $pt, 'live' => true], 'email', Support\FakeTransport::fieldTypes(...), $dec);
         $this->assertFalse($absent->verified);
     }
 
@@ -34,7 +34,7 @@ final class VerifiedTest extends TestCase
     {
         $salt = 'aabbccddeeff0011'; $pt = 'bob@example.com';
         $dec = fn($w) => $pt;
-        $ch = Change::fromApi(['id' => 'c1', 'event' => 'field_updated', 'person_user_id' => 'u1', 'slug' => 'email_personal', 'value' => $pt, 'verified_hash' => $this->h($salt, $pt), 'verified_salt' => $salt], fn($s) => 'email', $dec);
+        $ch = Change::fromApi(['id' => 'c1', 'event' => 'field_updated', 'person_user_id' => 'u1', 'slug' => 'email_personal', 'value' => $pt, 'verified_hash' => $this->h($salt, $pt), 'verified_salt' => $salt], fn($s) => 'email', Support\FakeTransport::fieldTypes(...), $dec);
         $this->assertTrue($ch->verified);
     }
 }

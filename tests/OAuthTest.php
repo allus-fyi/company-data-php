@@ -71,11 +71,11 @@ final class OAuthTest extends TestCase
     {
         $c = new OAuthClient($this->idwCfg(), new FakeTransport());
         // Every claim carries a mandatory `name` — the identity everything downstream is keyed by.
+        // The TYPE is passed through as written: which types are claimable is registry data the
+        // server owns, and a type it does not accept comes back as invalid_request.
         $claims = [
             new Claim('email', 'email', suggest: 'email_personal'),
-            new Claim('avatar', 'photo'),
             new Claim('phone', 'phone', required: true),
-            new Claim('nothing', ''),
         ];
         [, $q] = $this->parseUrl($c->authorizeUrl('one_time', claims: $claims));
         $parsed = json_decode($q['claims'], true);

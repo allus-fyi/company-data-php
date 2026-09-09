@@ -173,7 +173,7 @@ final class WebhooksTest extends TestCase
     public function testParsePlainJsonBody(): void
     {
         $body = self::changeBody();
-        $change = Webhooks::parse($body, self::headers($body), $this->config(), $this->typeForSlug(), $this->decryptValue());
+        $change = Webhooks::parse($body, self::headers($body), $this->config(), $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('chg-1', $change->id);
         self::assertSame('field_updated', $change->event);
         self::assertSame('person-1', $change->personId);
@@ -198,7 +198,7 @@ final class WebhooksTest extends TestCase
             . '</response>';
         $headers = self::headers($xml);
 
-        $change = Webhooks::parse($xml, $headers, $this->config(), $this->typeForSlug(), $this->decryptValue());
+        $change = Webhooks::parse($xml, $headers, $this->config(), $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('chg-7', $change->id);
         self::assertSame('field_updated', $change->event);
         self::assertSame('work_email', $change->slug);
@@ -217,7 +217,7 @@ final class WebhooksTest extends TestCase
         $headers = self::headers($body); // HMAC over the envelope (the final body)
 
         self::assertTrue(Webhooks::verify($body, $headers, $cfg));
-        $change = Webhooks::parse($body, $headers, $cfg, $this->typeForSlug(), $this->decryptValue());
+        $change = Webhooks::parse($body, $headers, $cfg, $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('chg-1', $change->id);
         self::assertSame('field_updated', $change->event);
         self::assertSame('work_email', $change->slug);
@@ -231,7 +231,7 @@ final class WebhooksTest extends TestCase
         [, $accountPub] = $this->makeAccountKey('x');
         $body = self::wrapToAccountKey($accountPub, self::changeBody());
         $this->expectException(WebhookError::class);
-        Webhooks::parse($body, self::headers($body), $this->config(), $this->typeForSlug(), $this->decryptValue());
+        Webhooks::parse($body, self::headers($body), $this->config(), $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
     }
 
     // ── handle = verify + parse ───────────────────────────────────────────────
@@ -239,7 +239,7 @@ final class WebhooksTest extends TestCase
     public function testHandleVerifyThenParse(): void
     {
         $body = self::changeBody();
-        $change = Webhooks::handle($body, self::headers($body), $this->config(), $this->typeForSlug(), $this->decryptValue());
+        $change = Webhooks::handle($body, self::headers($body), $this->config(), $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('chg-1', $change->id);
     }
 
@@ -249,7 +249,7 @@ final class WebhooksTest extends TestCase
         $headers = self::headers($body);
         $headers['X-Allus-Signature'] = 'deadbeef';
         $this->expectException(WebhookError::class);
-        Webhooks::handle($body, $headers, $this->config(), $this->typeForSlug(), $this->decryptValue());
+        Webhooks::handle($body, $headers, $this->config(), $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
     }
 
     // ── Client method delegation ──────────────────────────────────────────────
@@ -291,7 +291,7 @@ final class WebhooksTest extends TestCase
         $cfg = $this->config($accountPem, 'acctpp');
         $body = self::wrapToAccountKey($accountPub, self::changeBody());
         // No accountKey arg → loaded from config on demand (config-only contract holds).
-        $change = Webhooks::parse($body, self::headers($body), $cfg, $this->typeForSlug(), $this->decryptValue());
+        $change = Webhooks::parse($body, self::headers($body), $cfg, $this->typeForSlug(), FakeTransport::fieldTypes(...), $this->decryptValue());
         self::assertSame('chg-1', $change->id);
         self::assertSame(self::$vector['text']['plaintext'], $change->value);
     }

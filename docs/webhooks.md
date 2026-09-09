@@ -39,8 +39,8 @@ internally; you'll normally use the client methods inside an app.
 use Allus\CompanyData\Webhooks\Webhooks;
 
 Webhooks::verify(string $rawBody, array $headers, Config $config): bool
-Webhooks::parse(string $rawBody, array $headers, Config $config, callable $typeForSlug, callable $decryptValue, ?callable $binaryFetch = null, ?RSAPrivateKey $accountKey = null): Change
-Webhooks::handle(string $rawBody, array $headers, Config $config, callable $typeForSlug, callable $decryptValue, ?callable $binaryFetch = null, ?RSAPrivateKey $accountKey = null): Change
+Webhooks::parse(string $rawBody, array $headers, Config $config, callable $typeForSlug, callable $fieldTypes, callable $decryptValue, ?callable $binaryFetch = null, ?RSAPrivateKey $accountKey = null): Change
+Webhooks::handle(string $rawBody, array $headers, Config $config, callable $typeForSlug, callable $fieldTypes, callable $decryptValue, ?callable $binaryFetch = null, ?RSAPrivateKey $accountKey = null): Change
 ```
 
 ## In a web route

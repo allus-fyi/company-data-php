@@ -28,13 +28,6 @@ final class OAuthClient
     /** The hosted consent surface. Native apps claim this https link; web is the fallback. */
     public const DEFAULT_AUTHORIZE_URL = 'https://web.allme.fyi/auth';
 
-    /**
-     * Binary field types can't be requested as claims — the ID-document subtypes are binary too,
-     * so no ID document ever reaches this surface.
-     */
-    private const NON_CLAIMABLE = [
-        'photo', 'document', 'legal_document', 'passport', 'photo_id', 'drivers_license',
-    ];
     private const MAX_CLAIMS = 15;
     private const MODES = ['signin', 'one_time', 'connect', '2fa_enroll'];
     private const RESPONSE_MODES = ['redirect', 'detached'];
@@ -72,7 +65,11 @@ final class OAuthClient
     /**
      * Build the consent-screen URL — the "Sign in with allme" button target.
      *
-     * @param list<Claim> $claims one_time claims (validated: binary/unknown dropped, cap 15)
+     * @param list<Claim> $claims claims, validated for what this client can answer for itself:
+     *        a name, no duplicate name, cap 15. WHICH TYPES ARE CLAIMABLE IS THE SERVER'S
+     *        ANSWER — this URL is built before any token exists and an identity app reads no
+     *        registry, so a claim of a type the server does not accept comes back as
+     *        {@code invalid_request} rather than being dropped here.
      */
     public function authorizeUrl(
         string $mode,
@@ -118,11 +115,10 @@ final class OAuthClient
         $out = [];
         $seen = [];
         foreach ($claims as $c) {
-            if ($c->type === '' || in_array($c->type, self::NON_CLAIMABLE, true)) {
-                continue;
-            }
-            // §2: `name` is the claim's identity and it is mandatory. Refused HERE rather than
+            // `name` is the claim's identity and it is mandatory. Refused HERE rather than
             // left to the API, so the integration error surfaces at the call that made it.
+            // The TYPE is not filtered: what a claim may be typed as is registry data the server
+            // owns, and this client holds none of it.
             $name = trim($c->name);
             if ($name === '') {
                 throw new ConfigError('every claim must carry a `name`');

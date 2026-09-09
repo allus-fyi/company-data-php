@@ -65,7 +65,7 @@ final class PumpTest extends TestCase
     {
         return fn (array $event): Change => Change::fromApi(
             $event,
-            fn (string $s): ?string => 'text',
+            fn (string $s): ?string => 'text', Support\FakeTransport::fieldTypes(...),
             fn (array|string $w): string => Crypto::decrypt($w, self::$key),
         );
     }
@@ -433,7 +433,7 @@ final class PumpTest extends TestCase
             }
             return Change::fromApi(
                 $event,
-                fn (string $s): ?string => 'text',
+                fn (string $s): ?string => 'text', Support\FakeTransport::fieldTypes(...),
                 fn (array|string $w): string => Crypto::decrypt($w, self::$key),
             );
         };
@@ -488,7 +488,7 @@ final class PumpTest extends TestCase
             }
             return Change::fromApi(
                 $event,
-                fn (string $s): ?string => 'text',
+                fn (string $s): ?string => 'text', Support\FakeTransport::fieldTypes(...),
                 fn (array|string $w): string => Crypto::decrypt($w, self::$key),
             );
         };

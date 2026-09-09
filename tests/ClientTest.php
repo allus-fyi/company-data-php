@@ -862,7 +862,7 @@ final class ClientTest extends TestCase
         $chg = Change::fromApi(
             ['id' => 'chg-sign', 'event' => 'document_status_changed', 'person_user_id' => 'u-2',
              'action' => 'signed', 'document_id' => 'doc-7', 'status' => 'active', 'at' => '2026-06-22T10:00:00Z'],
-            fn (string $s): ?string => null,
+            fn (string $s): ?string => null, FakeTransport::fieldTypes(...),
             fn (array|string $w): string => '',
         );
         self::assertSame('document_status_changed', $chg->event);
@@ -876,7 +876,7 @@ final class ClientTest extends TestCase
             ['id' => 'chg-cancel', 'event' => 'document_status_changed', 'person_user_id' => 'u-3',
              'action' => 'cancelled', 'note' => 'Too expensive', 'document_id' => 'doc-8', 'status' => 'ended',
              'at' => '2026-06-22T11:00:00Z'],
-            fn (string $s): ?string => null,
+            fn (string $s): ?string => null, FakeTransport::fieldTypes(...),
             fn (array|string $w): string => '',
         );
         self::assertSame('cancelled', $cancelled->action);
@@ -940,7 +940,7 @@ final class ClientTest extends TestCase
         $accepted = Change::fromApi(
             ['id' => 'c1', 'event' => 'connection_request_accepted', 'request_id' => 'req-9',
              'person_user_id' => 'person-1', 'share_code' => 'P1CODE', 'at' => '2026-06-23T10:00:00Z'],
-            $type, $dec,
+            $type, FakeTransport::fieldTypes(...), $dec,
         );
         self::assertSame('connection_request_accepted', $accepted->event);
         self::assertSame('req-9', $accepted->requestId);
@@ -952,14 +952,14 @@ final class ClientTest extends TestCase
         $rejected = Change::fromApi(
             ['id' => 'c2', 'event' => 'connection_request_rejected', 'request_id' => 'req-8',
              'person_user_id' => 'person-2'],
-            $type, $dec,
+            $type, FakeTransport::fieldTypes(...), $dec,
         );
         self::assertSame('connection_request_rejected', $rejected->event);
         self::assertSame('req-8', $rejected->requestId);
 
         $created = Change::fromApi(
             ['id' => 'c3', 'event' => 'connection_created', 'person_user_id' => 'person-3'],
-            $type, $dec,
+            $type, FakeTransport::fieldTypes(...), $dec,
         );
         self::assertNull($created->requestId); // unrelated event
     }

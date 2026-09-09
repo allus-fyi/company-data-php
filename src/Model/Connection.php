@@ -39,6 +39,8 @@ final class Connection
      *
      * @param array<string,mixed> $obj
      * @param callable(string): ?string $typeForSlug
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      * @param array<string,mixed>|null $identity
@@ -46,6 +48,7 @@ final class Connection
     public static function fromApi(
         array $obj,
         callable $typeForSlug,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
         ?array $identity = null,
@@ -69,6 +72,7 @@ final class Connection
                 $values[(string) $slug] = Value::fromApi(
                     $entry,
                     $typeForSlug((string) $slug),
+                    $fieldTypes,
                     $decryptValue,
                     $binaryFetch,
                 );

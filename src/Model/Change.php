@@ -85,12 +85,15 @@ final class Change
      *
      * @param array<string,mixed> $obj
      * @param callable(string): ?string $typeForSlug
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      */
     public static function fromApi(
         array $obj,
         callable $typeForSlug,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
     ): self {
@@ -103,7 +106,7 @@ final class Change
             // Reuse the Value typing path so feed + connection produce identical
             // typed values (incl. the same lazy BinaryHandle for binaries).
             if (array_key_exists('value', $obj) || array_key_exists('value_url', $obj)) {
-                $value = ValueTyping::typed($obj, $typeForSlug($slug), $decryptValue, $binaryFetch);
+                $value = ValueTyping::typed($obj, $typeForSlug($slug), $fieldTypes, $decryptValue, $binaryFetch);
             }
         }
 
@@ -168,6 +171,8 @@ final class Change
      *
      * @param array<string,mixed>|list<mixed> $body
      * @param callable(string): ?string $typeForSlug
+     * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
+     *        rows a slug's resolution just healed in govern that same value.
      * @param callable(array<string,mixed>|string): string $decryptValue
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch
      *
@@ -176,6 +181,7 @@ final class Change
     public static function listFromApi(
         array $body,
         callable $typeForSlug,
+        callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
     ): array {
@@ -187,7 +193,7 @@ final class Change
         $out = [];
         foreach ($items as $o) {
             if (is_array($o)) {
-                $out[] = self::fromApi($o, $typeForSlug, $decryptValue, $binaryFetch);
+                $out[] = self::fromApi($o, $typeForSlug, $fieldTypes, $decryptValue, $binaryFetch);
             }
         }
         return $out;
