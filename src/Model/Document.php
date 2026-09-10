@@ -41,7 +41,16 @@ final class Document
         public readonly ?\DateTimeImmutable $updatedAt,
         public readonly bool $requiresSignature = false,
         public readonly bool $requiresAcceptance = false,
-        /** @var array<int,array<string,mixed>> contract sign/accept audit trail (company-side reads only) */
+        /** SHA-256 of the unencrypted PDF bytes, lowercase hex. Null on a JSON contract. */
+        public readonly ?string $plainSha256 = null,
+        /** When the platform seal was applied. Null until sealed. */
+        public readonly ?\DateTimeImmutable $sealedAt = null,
+        /**
+         * @var array<int,array<string,mixed>> contract sign/accept audit trail (company-side
+         *      reads only), one entry per signature: action, method, content_sha256,
+         *      plain_sha256, signer_first_name, signer_last_name, signer_name_verified, ip,
+         *      user_agent, created_at.
+         */
         public readonly array $signatures = [],
         /**
          * @var array<int,array<string,mixed>>|null present only on a contract-flow run-participant
@@ -111,7 +120,21 @@ final class Document
             updatedAt: Coerce::dateTime($obj['updated_at'] ?? null),
             requiresSignature: (bool) Coerce::bool($obj['requires_signature'] ?? null),
             requiresAcceptance: (bool) Coerce::bool($obj['requires_acceptance'] ?? null),
-            signatures: is_array($obj['signatures'] ?? null) ? array_values(array_filter($obj['signatures'], 'is_array')) : [],
+            plainSha256: isset($obj['plain_sha256']) ? (string) $obj['plain_sha256'] : null,
+            sealedAt: Coerce::dateTime($obj['sealed_at'] ?? null),
+            // Each signature entry stays an untyped array (matching every existing
+            // signature field), but signer_name_verified is a boolean in the schema —
+            // XML carries it as the string "false"/"true", and a caller testing that
+            // raw string for truthiness reads a false verification as verified. Coerce
+            // it the same way every other boolean field on this transport is coerced.
+            signatures: is_array($obj['signatures'] ?? null)
+                ? array_map(
+                    static fn (array $s): array => array_key_exists('signer_name_verified', $s)
+                        ? [...$s, 'signer_name_verified' => Coerce::bool($s['signer_name_verified'])]
+                        : $s,
+                    array_values(array_filter($obj['signatures'], 'is_array')),
+                )
+                : [],
             runSignatures: is_array($obj['run_signatures'] ?? null) ? array_values(array_filter($obj['run_signatures'], 'is_array')) : null,
             decryptValue: $decryptValue,
             raw: $obj,

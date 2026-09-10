@@ -288,6 +288,16 @@ final class Crypto
     }
 
     /**
+     * SHA-256 of raw PDF bytes, lowercase hex — the plainSha256 a signable file document's
+     * create call and every sign/accept act must agree on. Exposed so a caller can precompute
+     * or verify it; createDocument calls this itself when a plainSha256 override is not given.
+     */
+    public static function computePlainSha256(string $data): string
+    {
+        return hash('sha256', $data);
+    }
+
+    /**
      * Verified fields: true iff sha256(salt ‖ plaintext) === expectedHash (hex). Consumers
      * recompute this from the plaintext they just decrypted and trust the verified flag only on a match.
      */

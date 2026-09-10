@@ -50,6 +50,15 @@ final class Change
         public readonly ?string $signedAt = null,
         /** Set on a cancelled document_status_changed: ISO date the cancellation takes effect. */
         public readonly ?string $cancelEffectiveDate = null,
+        /** Set on document_status_changed: when the platform seal was applied. Null until sealed. */
+        public readonly ?\DateTimeImmutable $sealedAt = null,
+        /** Set on document_status_changed: SHA-256 of the document's unencrypted PDF bytes. Null on a JSON contract. */
+        public readonly ?string $plainSha256 = null,
+        /** Set on document_status_changed: the signature's own signer evidence. */
+        public readonly ?string $signerFirstName = null,
+        public readonly ?string $signerLastName = null,
+        /** True iff the submitted name matched the signer's verified ID name. Null when unset. */
+        public readonly ?bool $signerNameVerified = null,
         /** Set on connection_request_accepted | connection_request_rejected. */
         public readonly ?string $requestId = null,
         /** Set on key_rotated — SHA-256 fingerprint of the person's NEW public key. */
@@ -146,6 +155,11 @@ final class Change
             contentSha256: ($event === 'document_status_changed' && isset($obj['content_sha256'])) ? (string) $obj['content_sha256'] : null,
             signedAt: ($event === 'document_status_changed' && isset($obj['signed_at'])) ? (string) $obj['signed_at'] : null,
             cancelEffectiveDate: ($event === 'document_status_changed' && isset($obj['cancel_effective_date'])) ? (string) $obj['cancel_effective_date'] : null,
+            sealedAt: $event === 'document_status_changed' ? Coerce::dateTime($obj['sealed_at'] ?? null) : null,
+            plainSha256: ($event === 'document_status_changed' && isset($obj['plain_sha256'])) ? (string) $obj['plain_sha256'] : null,
+            signerFirstName: ($event === 'document_status_changed' && isset($obj['signer_first_name'])) ? (string) $obj['signer_first_name'] : null,
+            signerLastName: ($event === 'document_status_changed' && isset($obj['signer_last_name'])) ? (string) $obj['signer_last_name'] : null,
+            signerNameVerified: ($event === 'document_status_changed' && isset($obj['signer_name_verified'])) ? Coerce::bool($obj['signer_name_verified']) : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,
             publicKeySha256: ($event === 'key_rotated' && isset($obj['public_key_sha256']))

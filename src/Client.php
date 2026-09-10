@@ -820,12 +820,17 @@ final class Client
      * recipient device's lock vs decrypt-on-load behaviour, NOT whether the value
      * is encrypted.
      *
+     * For payload_kind='file', plain_sha256 (SHA-256 of the raw PDF bytes, lowercase hex) is
+     * computed from file_bytes via Crypto::computePlainSha256() when not given explicitly, and
+     * sent with the create call — required by the server for a signable file document, optional
+     * for any other. Ignored for payload_kind='json'.
+     *
      * @param array{
      *     kind?: string, name: string, payload_kind: string, is_private?: bool,
      *     description?: ?string, connection_id?: ?string, person_user_id?: ?string,
      *     share_code?: ?string, json_value?: mixed, file_bytes?: ?string,
      *     file_mime?: ?string, file_name?: ?string, requires_signature?: bool, requires_acceptance?: bool,
-     *     metadata?: ?array<string,mixed>, status?: ?string
+     *     metadata?: ?array<string,mixed>, status?: ?string, plain_sha256?: ?string
      * } $opts
      *
      * @throws ConfigError on a missing/invalid option (incl. private broadcast).
@@ -927,6 +932,10 @@ final class Client
         if (!is_string($fileBytes)) {
             throw new ConfigError("file_bytes is required for payload_kind='file'");
         }
+        $plainSha256 = $opts['plain_sha256'] ?? null;
+        $body['plain_sha256'] = is_string($plainSha256) && $plainSha256 !== ''
+            ? $plainSha256
+            : Crypto::computePlainSha256($fileBytes);
         $created = $this->http->post(self::DOCUMENTS, $body);
         $doc = Document::fromApi(self::docObj($created), fn (array|string $w): string => $this->decryptValue($w));
         $fileUrl = self::DOCUMENTS . '/' . rawurlencode((string) $doc->id) . '/file';

@@ -468,18 +468,41 @@ $contract = $client->createDocument([
 $plain = $client->document($contract->id)->json();   // ['plan' => 'pro', …]
 
 // A file document (raw bytes). Per-person → encrypted; broadcast → plaintext.
+// plain_sha256 (SHA-256 of the raw PDF bytes) is computed from file_bytes via
+// Crypto::computePlainSha256() when not given explicitly — required by the
+// server for a signable file document (requires_signature/requires_acceptance),
+// optional for any other, ignored for payload_kind='json'.
 $signed = $client->createDocument([
-    'name'          => 'Signed PDF',
-    'payload_kind'  => 'file',
-    'file_bytes'    => file_get_contents('/tmp/agreement.pdf'),
-    'file_mime'     => 'application/pdf',
-    'person_user_id'=> $personUserId,        // per-person → bytes encrypted on upload
+    'name'               => 'Signed PDF',
+    'payload_kind'       => 'file',
+    'file_bytes'         => file_get_contents('/tmp/agreement.pdf'),
+    'file_mime'          => 'application/pdf',
+    'person_user_id'     => $personUserId,        // per-person → bytes encrypted on upload
+    'requires_signature' => true,
+    // 'plain_sha256' => Crypto::computePlainSha256($fileBytes), // optional — computed otherwise
 ]);
 ```
 
-* **Options** (associative array): `name` (required), `payload_kind` (`'json'`|`'file'`, required), `is_private` (default `false`), `kind` (default `'document'`), `description`, `status`, `metadata`, and **one** target — `connection_id`, `person_user_id`, or `share_code` (omit all three for a broadcast). For `'json'`: `json_value`. For `'file'`: `file_bytes` (+ optional `file_mime`).
+* **Options** (associative array): `name` (required), `payload_kind` (`'json'`|`'file'`, required), `is_private` (default `false`), `kind` (default `'document'`), `description`, `status`, `metadata`, `plain_sha256` (`'file'` only), and **one** target — `connection_id`, `person_user_id`, or `share_code` (omit all three for a broadcast). For `'json'`: `json_value`. For `'file'`: `file_bytes` (+ optional `file_mime`).
 * **Returns:** the created `Document`.
 * **Throws:** `ConfigError` (missing `name`, bad `payload_kind`, `is_private=true` with no target, or a missing `json_value`/`file_bytes`); `AuthError`, `ApiError`, `RateLimitError`.
+
+**The document seal.** A `Document` also carries `plainSha256` (SHA-256 of the
+unencrypted PDF bytes, `null` on a json document and on a file document
+with no stored plaintext hash) and `sealedAt` (`null` until a seal actually
+succeeds). Completing every required signature/acceptance on a signable
+document is not the same as sealing it: when the last one is recorded the
+platform *attempts*, on that same request, to append a Signatures page and
+sign the whole PDF with a platform certificate, replacing every party's copy
+with the sealed one — but the attempt can fail (no PDF bytes on the completing
+act, a byte mismatch, the sealing service unavailable, or a custodian-completed
+ward act) without affecting the signatures or the document's completed status.
+It is then simply left unsealed, and any party can seal it afterwards from
+their own device or the owning company's portal (no SDK call triggers a seal).
+Each `Document::$signatures`
+entry additionally carries `plain_sha256`, `signer_first_name`,
+`signer_last_name` and `signer_name_verified` beside its existing
+`action`/`method`/`content_sha256`/`ip`/`user_agent`/`created_at` keys.
 
 ### `listDocuments(...)` / `document($id)`
 
@@ -543,7 +566,11 @@ $client->deleteDocument($documentId);                          // also removes t
 
 When a document's lifecycle status changes, the feed/webhook emits a
 `document_status_changed` `Change` carrying `documentId` + the new `status` (and
-the usual `personId` / `shareCode` / `at`). Handle it alongside your field events:
+the usual `personId` / `shareCode` / `at`). A transition to `active`
+additionally carries `sealedAt`, `plainSha256`, `signerFirstName`,
+`signerLastName` and `signerNameVerified` — the same seal state the document
+read carries, so you never need a follow-up `document($id)` call just to learn
+a run sealed. Handle it alongside your field events:
 
 ```php
 $client->processChanges(function (\Allus\CompanyData\Model\Change $change): void {
@@ -775,6 +802,7 @@ A change-feed / webhook event.
 | `shareCode` | The person's profile share code — present on every event (may be `null`). |
 | `slug`, `value`, `live` | Present only on `field_updated`; `value` is typed exactly like `Value->value` (incl. a lazy `BinaryHandle` for binaries). Connection/consent events carry no slot/value. |
 | `documentId`, `status` | Present only on `document_status_changed` — the document's id and its new lifecycle status. |
+| `sealedAt`, `plainSha256`, `signerFirstName`, `signerLastName`, `signerNameVerified` | Present on a `document_status_changed` transition to `active` — the same seal state the document read carries. `null` otherwise. |
 | `connectionId`, `messageId`, `personPublicKey`, `messageBody` | Present only on `message_received` — a person messaged your service. `messageBody` is the **decrypted** text. See [Messaging](#messaging). |
 | `verified`, `verifiedAt`, `verifiedExpiresAt` | Present on `field_updated`, with the same meaning as on `Value`. |
 | `verifiedMethod`, `verifiedProvider`, `verificationId` | The proof metadata, same meaning and same all-or-none rule as on `Value`. |
