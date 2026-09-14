@@ -96,28 +96,62 @@ network or decryption happens at construction.
 ```php
 final class BinaryHandle {
     public function valueUrl(): ?string;        // the opaque slot-keyed file URL (read-only)
-    public function bytes(): string;            // fetch (if needed) → the file bytes, either shape
+    public function bytes(): string;            // fetch (if needed) → the primary file bytes
     public function save(string $path): int;    // write bytes() to path crash-safely; returns bytes written
-    public function contentSha256(): ?string;   // X-Allus-Content-Sha256 for the fetched bytes
-    public function contentType(): ?string;     // the Content-Type they arrived with
+    public function pages(): array;             // list<BinaryPage>, in envelope order ([] for a single-file one)
+    public function metadata(): array;          // array<string,?string> — the type's declared entries
+    public function contentSha256(): ?string;   // X-Allus-Content-Sha256 for the SERVED ARTIFACT
+    public function contentType(): ?string;     // the Content-Type the answer arrived with
+}
+
+final class BinaryPage {
+    public readonly ?string $label;   // front | back | additional
+    public readonly ?string $name;    // the original filename
+    public readonly ?string $mime;    // the server-derived media type
+    public readonly string $bytes;    // the decoded page bytes
 }
 ```
 
-On first `->bytes()`/`->save()` it GETs the slot-keyed file endpoint, which has
-**two 200 shapes** decided by whether the *person's* source field is private —
-their setting, changeable at any time and not exposed to you:
+On the first `->bytes()`/`->pages()`/`->metadata()`/`->save()` it GETs the slot-keyed
+file endpoint, which has **three 200 shapes** decided by whether the *person's* source
+field is private AND by the TYPE of the field they answered with — neither yours to
+choose, both changeable, and not exposed to you:
 
-- **`application/json`** → `{"encrypted": true, "value": <wrapper>}`. Decrypt the
-  inner `{"_enc":1,…}` wrapper with the service key → a JSON file-envelope string
-  (`{"full": "data:…", "thumb": …}` photos, `{"file": "data:…", …}` documents) →
-  base64-decode the primary data URI (`full` / `file`) → the file bytes.
+- **`application/json`, `{"encrypted": true, "value": <wrapper>}`** (private source) →
+  decrypt the inner `{"_enc":1,…}` wrapper with the service key → the JSON ENVELOPE
+  string.
+- **`application/json`, `{"encrypted": false, "value": "<envelope>"}`** (a non-private
+  source whose type stores more than one file or declares metadata entries — the
+  ID-document subtypes and `legal_document`) → the same envelope in the clear.
+  Nothing is decrypted.
 - **any other `Content-Type`** → the body IS the file. Nothing is decrypted, and a
   handle with no decrypt wiring still works.
 
-The shapes are told apart on `Content-Type`, never by sniffing the body: reading a
-wrapper as bytes would write ciphertext to disk with nothing to signal it, so a
-missing header resolves to the JSON path, which fails loudly instead. The result
-is cached on the handle (repeated calls don't re-fetch).
+The raw-bytes shape is told apart on `Content-Type`, never by sniffing the body:
+reading a wrapper as bytes would write ciphertext to disk with nothing to signal it,
+so a missing header resolves to the JSON path, which fails loudly instead. Inside a
+JSON body it is `encrypted` that decides.
+The envelope is a photo's `{"full": "data:…", "thumb": …}`, a single-file document's
+`{"file": "data:…", …}`, or a multi-page document's
+`{"pages": [{"label": …, "file": "data:…", …}], …}`, with every entry the type declares
+beside it.
+
+`->pages()` answers the pages of a multi-page envelope in order, and `[]` for a
+single-file one. `->metadata()` answers every string-keyed envelope member other than
+`pages`, `file`, `full`, `thumb`, `original_name`, `mime_type` and `size`, so a
+passport's `document_number`, `expiry_date`, `issuing_country` and `name` are all
+there; **it carries no ordering guarantee** — read the envelope string yourself if you
+need the declared order. **`->bytes()`/`->save()` throw
+`DecryptError('multi-page envelope: use pages')` on a multi-page envelope** rather
+than handing back the front page as though it were the whole document.
+
+All of the accessors share ONE lazy fetch: whichever is called first performs it, and
+the result is cached (repeated calls don't re-fetch). The digest header
+`X-Allus-Content-Sha256` is the sha256 of the **served artifact** — the raw bytes on the
+bytes shape, the served `value` string on either JSON shape — not "the sha256 of what
+`->bytes()` returns", which is false on a multi-page envelope. There is no variant
+selection.
+
 
 `->save()` is crash-safe (temp file → `fsync` → atomic `rename`). An unanswered
 binary slot yields an empty handle; calling `->bytes()` on it throws `DecryptError`.

@@ -214,9 +214,10 @@ final class HttpClient
     /**
      * GET returning the whole 2xx {@see Response} — status, headers AND raw body, with no parse.
      *
-     * The company-facing binary file endpoints have two 200 shapes (a JSON wrapper for an
-     * encrypted answer, raw file bytes for a plaintext one) that are told apart by
-     * {@code Content-Type}, and both carry an {@code X-Allus-Content-Sha256} digest header. Neither
+     * The company-facing binary file endpoints have three 200 shapes (a JSON wrapper for an
+     * encrypted answer, a JSON plaintext envelope, raw file bytes) — the bytes shape told apart by
+     * {@code Content-Type} and the two JSON ones by the body's {@code encrypted} member — and all
+     * three carry an {@code X-Allus-Content-Sha256} digest header. Neither
      * {@see get} (which parses) nor {@see getRaw} (which drops the headers) can express that, so this
      * hands the caller the response itself. Auth/refresh/retry and error mapping are identical.
      */

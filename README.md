@@ -748,39 +748,57 @@ $dob  = $conn->values['birthday']->value;         // DateTimeImmutable
 ### Binary fields — the lazy `BinaryHandle`
 
 A photo/document value is a `BinaryHandle`. Nothing is fetched or decrypted until
-you call `->bytes()` or `->save()`:
+you call `->bytes()`, `->pages()`, `->metadata()` or `->save()`:
 
 ```php
 $handle = $conn->values['passport_scan']->value;   // BinaryHandle (no network yet)
 
-$data = $handle->bytes();                           // GET the slot file → decrypt → file bytes (string)
-$n    = $handle->save('/tmp/passport.jpg');         // same, written to disk; returns bytes written
+$pages = $handle->pages();                          // GET the slot file → every page, in order
+$meta  = $handle->metadata();                       // the entries the type declares
+$data  = $handle->bytes();                          // the primary file bytes (single-file answers)
+$n     = $handle->save('/tmp/contract.pdf');        // same, written to disk; returns bytes written
 echo $handle->valueUrl();                            // the opaque slot-keyed URL it fetches from
+
+foreach ($pages as $page) {
+    echo $page->label, ' ', $page->name, ' ', $page->mime, ' ', strlen($page->bytes), PHP_EOL;
+}
+echo $meta['document_number'] ?? '', ' ', $meta['expiry_date'] ?? '', ' ', $meta['name'] ?? '';
 ```
 
-`->bytes()` GETs the slot-keyed file endpoint and returns the file bytes. The
-result is cached on the handle, so repeated calls don't re-fetch. `->save()`
-writes crash-safely (temp file → fsync → atomic rename).
+All four accessors share ONE lazy fetch of the slot-keyed file endpoint; the result is
+cached on the handle, so repeated calls don't re-fetch. `->save()` writes crash-safely
+(temp file → fsync → atomic rename).
 
-**That endpoint has two 200 shapes and you cannot predict which one you get.** It
-depends on whether the *person's* source field is private — their setting, which
-they can change at any time and which the API deliberately does not expose:
+**That endpoint has three 200 shapes and you cannot predict which one you get.** It
+depends on whether the *person's* source field is private AND on the TYPE of the field
+they answered with — neither yours to choose, both changeable, and neither exposed:
 
-| person's source field | response | the handle does |
+| answer | response | the handle does |
 |---|---|---|
-| private | `application/json` · `{"encrypted": true, "value": <wrapper>}` | decrypt with your service key → the JSON envelope (`{"full": "data:…"}` photos, `{"file": "data:…"}` documents) → base64-decode the data URI |
-| not private | the file's own `Content-Type` · the body **is** the file | return the bytes as-is; no key needed |
+| private source | `application/json` · `{"encrypted": true, "value": <wrapper>}` | decrypt with your service key → the JSON ENVELOPE string |
+| non-private source whose type stores pages or declares entries | `application/json` · `{"encrypted": false, "value": "<envelope>"}` | read that envelope string as-is; no key needed |
+| every other non-private source | the file's own `Content-Type` · the body **is** the file | return the bytes as-is; no key needed |
 
-The SDK tells them apart on `Content-Type` and never by sniffing the body. A
-plaintext answer works on a handle with no decrypt wiring at all.
+The SDK tells the raw-bytes shape apart on `Content-Type` and never by sniffing the
+body; inside a JSON body it is `encrypted` that decides. A plaintext answer works on a
+handle with no decrypt wiring at all.
+
+The envelope is a photo's `{"full": "data:…", "thumb": …}`, a single-file document's
+`{"file": "data:…", …}`, or a multi-page document's
+`{"pages": [{"label": …, "file": "data:…", …}], …}`, with every declared entry beside
+it. **`->bytes()`/`->save()` throw `DecryptError('multi-page envelope: use pages')` on
+a multi-page envelope** rather than handing back the front page as though it were the
+whole document — read `->pages()` instead. `->metadata()` **carries no ordering
+guarantee**; read the envelope string yourself if you need the declared order.
 
 ```php
-echo $handle->contentSha256();   // X-Allus-Content-Sha256 — the digest of exactly these bytes
-echo $handle->contentType();     // the Content-Type they arrived with
+echo $handle->contentSha256();   // X-Allus-Content-Sha256 — the digest of the SERVED ARTIFACT
+echo $handle->contentType();     // what the answer arrived as
 ```
 
-A photo slot serves the authoritative image; there is no thumbnail variant to
-select, because one slot has one byte sequence and therefore one digest.
+The digest is over the raw bytes on the bytes shape and over the served `value` string
+on either JSON shape. A photo slot serves the authoritative image; there is no
+thumbnail variant to select.
 
 A **Share once** answer's bytes are kept 90 days. Afterwards the slot still reads
 as answered but `->bytes()` throws `ApiError` with `status === 410` and

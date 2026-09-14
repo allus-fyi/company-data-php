@@ -646,13 +646,37 @@ final class Handlers implements Family
             return $v->format(DATE_ATOM);
         }
         if ($v instanceof BinaryHandle) {
-            try {
-                return '[binary ' . strlen($v->bytes()) . ' bytes]';
-            } catch (\Throwable) {
-                return '[binary value]';
-            }
+            return self::binaryDescriptor($v);
         }
         return (string) $v;
+    }
+
+    /**
+     * The one-line descriptor every SDK example prints for a fetched binary.
+     *
+     * The PAGE COUNT for a multi-page envelope (whose {@see BinaryHandle::bytes()} has no single
+     * answer), the byte length otherwise, and the declared metadata keys whenever the envelope
+     * carries any — so a {@code legal_document} shows its byte length AND its
+     * {@code document_number}/{@code expiry_date}. Keys are sorted, because the metadata map
+     * carries no ordering guarantee.
+     */
+    private static function binaryDescriptor(BinaryHandle $handle): string
+    {
+        try {
+            $pages = $handle->pages();
+            $head = $pages !== []
+                ? 'binary ' . count($pages) . ' pages'
+                : 'binary ' . strlen($handle->bytes()) . ' bytes';
+            $meta = $handle->metadata();
+            if ($meta !== []) {
+                $keys = array_keys($meta);
+                sort($keys);
+                $head .= '; meta: ' . implode(', ', $keys);
+            }
+            return '[' . $head . ']';
+        } catch (\Throwable) {
+            return '[binary value]';
+        }
     }
 
     // ── input helpers ────────────────────────────────────────────────────────

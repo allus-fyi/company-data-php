@@ -221,12 +221,14 @@ final class Client
     /**
      * Fetch a company-facing binary file endpoint and classify its response.
      *
-     * The endpoint has TWO 200 shapes and which one arrives is not the company's to predict:
+     * The endpoint has THREE 200 shapes and which one arrives is not the company's to predict:
      * a person whose source field is PRIVATE yields {@code application/json}
-     * {@code {"encrypted":true,"value":<wrapper>}}, a person whose field is not yields the file's own
-     * Content-Type and the bytes themselves. The decision is made on {@code Content-Type} and never by
-     * sniffing the body — a PDF or an image that happened to start with a brace would be
-     * indistinguishable from a wrapper.
+     * {@code {"encrypted":true,"value":<wrapper>}}; a NON-PRIVATE source whose type stores more than
+     * one file or declares metadata entries yields {@code {"encrypted":false,"value":"<envelope>"}};
+     * every other non-private source yields the file's own Content-Type and the bytes themselves.
+     * The bytes shape is told apart on {@code Content-Type} and never by sniffing the body — a PDF or
+     * an image that happened to start with a brace would be indistinguishable from a wrapper — and
+     * inside a JSON body it is {@code encrypted} that decides.
      *
      * A 410 {@code company_data.file_expired} (the answer's 90-day retention has elapsed) surfaces as
      * an {@see ApiError} whose {@code details} carry {@code content_sha256} and {@code expired_at}.
@@ -254,9 +256,21 @@ final class Client
             );
         }
 
-        // Parsed through the client's OWN parser, not a hard-coded json_decode: an XML-configured
-        // client speaks XML on every other endpoint and must not silently lose it on this one.
-        $body = $this->http->parseBody($resp, $this->http->wantsXml());
+        // Parsed by what the RESPONSE says it is, never by the configured `format`: these four
+        // routes answer `application/json` on both structured arms whatever the client speaks, so a
+        // client configured for XML must not hand this body to its XML parser.
+        $body = $this->http->parseBody($resp, stripos($contentType, 'xml') !== false);
+        // `encrypted: false` with a string `value` is the PLAINTEXT ENVELOPE arm; every other JSON
+        // body is the wrapper arm, which is what the bare-wrapper routes (a company's own contract
+        // copy, its run slot file) answer with.
+        if (is_array($body) && ($body['encrypted'] ?? null) === false && isset($body['value']) && is_string($body['value'])) {
+            return new BinaryFetchResult(
+                encrypted: false,
+                contentType: $contentType,
+                contentSha256: $digest,
+                envelope: $body['value'],
+            );
+        }
         $wrapper = is_array($body) && array_key_exists('value', $body) ? $body['value'] : $body;
         /** @var array<string,mixed>|string $wrapper */
         return new BinaryFetchResult(
