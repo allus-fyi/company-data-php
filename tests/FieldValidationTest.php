@@ -63,7 +63,7 @@ final class FieldValidationTest extends TestCase
 
     public function testVectorHasAllCases(): void
     {
-        self::assertCount(177, self::cases());
+        self::assertCount(179, self::cases());
     }
 
     public function testResolveCases(): void
