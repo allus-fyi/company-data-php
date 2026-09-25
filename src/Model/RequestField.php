@@ -35,6 +35,12 @@ final class RequestField
          */
         public readonly ?int $verifiedMaxAgeDays = null,
         public readonly array $raw = [],
+        /**
+         * The plugin behind a plugin row (`type === 'plugin'`): its name, field type and the field
+         * type's frozen description (blocks, inputs, outputs). Null on every other row, and on an
+         * API that does not send it.
+         */
+        public readonly ?RequestFieldPlugin $plugin = null,
     ) {
     }
 
@@ -56,6 +62,7 @@ final class RequestField
             verified: (bool) Coerce::bool($obj['verified'] ?? null),
             verifiedMaxAgeDays: Coerce::int($obj['verified_max_age_days'] ?? null),
             raw: $obj,
+            plugin: RequestFieldPlugin::fromApi($obj['plugin'] ?? null),
         );
     }
 

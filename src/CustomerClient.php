@@ -13,6 +13,10 @@ use Allus\CompanyData\Model\CustomerConnection;
 use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Model\FlowRun;
+use Allus\CompanyData\Model\PluginOptions;
+use Allus\CompanyData\Model\PluginOutputs;
+use Allus\CompanyData\Model\PluginPass;
+use Allus\CompanyData\Model\PluginPicksInvalid;
 use Allus\CompanyData\Pump\Pump;
 use Allus\CompanyData\Webhooks\Webhooks;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
@@ -245,10 +249,157 @@ final class CustomerClient
         return FlowRun::fromApi(is_array($body) ? $body : []);
     }
 
-    /** @param array<string,mixed> $body */
+    /**
+     * Submit this party's turn. `$body` carries the already-encrypted per-party `answers`; use
+     * {@see encryptFlowAnswer()} to build the copies and {@see checkFlowValue()} first to apply a
+     * field's minimum and maximum.
+     *
+     * Every answer whose field's default reads another party's private source is marked
+     * `source_private: true` before it is sent (the run is read once for the rule), so every later
+     * reader treats it as private.
+     *
+     * @param array<string,mixed> $body
+     */
     public function submitFlowAnswers(string $connectionId, string $runId, array $body): mixed
     {
+        if (is_array($body['answers'] ?? null) && $body['answers'] !== []) {
+            $view = $this->flowPartyView($this->flowRun($connectionId, $runId), false);
+            $slugs = [];
+            foreach ($body['answers'] as $a) {
+                if (is_array($a) && is_string($a['slug'] ?? null)) {
+                    $slugs[$a['slug']] = true;
+                }
+            }
+            foreach ($body['answers'] as $i => $a) {
+                if (is_array($a) && is_string($a['slug'] ?? null) && FlowPlugins::isDraftPrivate($view, $a['slug'], $slugs)) {
+                    $body['answers'][$i]['source_private'] = true;
+                }
+            }
+        }
+
         return $this->http->post(self::CONN . '/' . $connectionId . '/flow-runs/' . $runId . '/answers', $body);
+    }
+
+    /**
+     * Refuse a value outside its flow field's `min`/`max` before {@see encryptFlowAnswer()} seals it.
+     *
+     * The bounds are computed over the live answer map: this company's own copies of the run's
+     * answers (decrypted with the account key), overlaid with `$draft` — the current step's other
+     * not-yet-submitted answers — and `$value` for `$slug`, plugin answers expanded, constants
+     * computed. A bound that computes to null is no bound.
+     *
+     * @param array<string,mixed> $draft
+     *
+     * @throws ValidationError naming the bound, as the service Client does
+     */
+    public function checkFlowValue(FlowRun $run, string $slug, mixed $value, array $draft = []): void
+    {
+        $draft[$slug] = $value;
+        $live = FlowPlugins::liveAnswerMap($this->flowPartyView($run), $draft);
+        FlowPlugins::checkBounds($run->definition, $slug, $value, $live, $run->referenceDate);
+    }
+
+    /**
+     * A pass for the plugin fields of the run's current step —
+     * `POST /api/company-connections/{connectionId}/flow-runs/{runId}/plugin-pass`. Issued only
+     * while the run awaits this company's party on that step.
+     */
+    public function pluginPass(string $connectionId, string $runId): PluginPass
+    {
+        return PluginPass::fromApi($this->http->post(self::CONN . '/' . $connectionId . '/flow-runs/' . $runId . '/plugin-pass'));
+    }
+
+    /**
+     * The options of one block of the current step's plugin field `$slug`. Same contract as the
+     * service {@see Client::pluginOptions()}, with a leading `$connectionId`; the inputs are read
+     * from this company's own copies of the run's answers overlaid with `$draft`.
+     *
+     * @param array<string,string> $picks
+     * @param array<string,mixed>  $values
+     * @param array<string,mixed>  $draft
+     */
+    public function pluginOptions(string $connectionId, string $runId, string $slug, string $block, string $query = '', array $picks = [], array $values = [], array $draft = []): PluginOptions
+    {
+        $run = $this->flowRun($connectionId, $runId);
+        $pass = $this->pluginPass($connectionId, $runId);
+        $call = FlowPlugins::prepareCall($this->flowPartyView($run), $pass, $slug, $draft);
+        $reply = FlowPlugins::callPlugin($pass, fn (): PluginPass => $this->pluginPass($connectionId, $runId), $call, [
+            'op' => 'options',
+            'block' => $block,
+            'query' => $query,
+            'picks' => $picks,
+            'values' => $values,
+        ]);
+
+        return PluginOptions::fromReply($reply);
+    }
+
+    /**
+     * The outputs of the current step's plugin field `$slug` for `$picks` and `$values`, or
+     * {@see PluginPicksInvalid}. Same contract as the service {@see Client::pluginOutputs()}, with a
+     * leading `$connectionId`.
+     *
+     * @param array<string,string> $picks
+     * @param array<string,mixed>  $values
+     * @param array<string,mixed>  $draft
+     */
+    public function pluginOutputs(string $connectionId, string $runId, string $slug, array $picks = [], array $values = [], array $draft = []): PluginOutputs|PluginPicksInvalid
+    {
+        $run = $this->flowRun($connectionId, $runId);
+        $pass = $this->pluginPass($connectionId, $runId);
+        $call = FlowPlugins::prepareCall($this->flowPartyView($run), $pass, $slug, $draft);
+        $reply = FlowPlugins::callPlugin($pass, fn (): PluginPass => $this->pluginPass($connectionId, $runId), $call, [
+            'op' => 'outputs',
+            'picks' => $picks,
+            'values' => $values,
+        ]);
+
+        return FlowPlugins::outputsResult($reply);
+    }
+
+    /**
+     * This company's view of a run. It is bound to the party that owns the current step — the only
+     * step it answers or calls a plugin on — and reads its own answer copies with the account key
+     * (`$withAnswers` false reads none: the privacy rule needs only the graph and the lists).
+     *
+     * @return array{definition: array<string,mixed>, currentNode: ?string, referenceDate: ?string, stored: array<string,mixed>, privateSlugs: ?list<string>, ownPartyKeys: list<string>}
+     */
+    private function flowPartyView(FlowRun $run, bool $withAnswers = true): array
+    {
+        $ownUid = null;
+        foreach ((is_array($run->definition['nodes'] ?? null) ? $run->definition['nodes'] : []) as $n) {
+            if (is_array($n) && ($n['key'] ?? null) === $run->currentNode && isset($n['party'])) {
+                $ownUid = $run->bindings[(string) $n['party']] ?? null;
+            }
+        }
+        $own = [];
+        $stored = [];
+        if ($ownUid !== null && $ownUid !== '') {
+            foreach ($run->bindings as $key => $uid) {
+                if ($uid === $ownUid) {
+                    $own[] = (string) $key;
+                }
+            }
+            foreach ($withAnswers ? $run->answers : [] as $row) {
+                if (($row['for_user_id'] ?? null) !== $ownUid) {
+                    continue;
+                }
+                $slug = $row['slug'] ?? null;
+                $value = $row['value'] ?? null;
+                if (is_string($slug) && (is_string($value) || is_array($value))) {
+                    $stored[$slug] = $this->decryptAccount($value);
+                }
+            }
+        }
+
+        return [
+            'definition' => $run->definition,
+            'currentNode' => $run->currentNode,
+            'referenceDate' => $run->referenceDate,
+            'stored' => $stored,
+            'privateSlugs' => $run->privateSlugs,
+            'ownPartyKeys' => $own,
+        ];
     }
 
     public function declineFlowRun(string $connectionId, string $runId): mixed

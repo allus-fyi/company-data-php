@@ -52,6 +52,15 @@ final class FlowRun
          */
         public readonly array $participants = [],
         public readonly array $raw = [],
+        /**
+         * The slugs whose answers came from a private source (a party's private field, a plugin
+         * called with a private input, a default filled from one). Metadata, never a value. Null
+         * when the API did not send the list — unknown, which the SDK treats as private for every
+         * other party.
+         *
+         * @var list<string>|null
+         */
+        public readonly ?array $privateSlugs = null,
     ) {
     }
 
@@ -119,6 +128,16 @@ final class FlowRun
             }
         }
 
+        $privateSlugs = null;
+        if (is_array($obj['private_slugs'] ?? null)) {
+            $privateSlugs = [];
+            foreach ($obj['private_slugs'] as $slug) {
+                if ($slug !== null && is_scalar($slug)) {
+                    $privateSlugs[] = (string) $slug;
+                }
+            }
+        }
+
         return new self(
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             flowId: isset($obj['flow_id']) ? (string) $obj['flow_id'] : null,
@@ -138,6 +157,7 @@ final class FlowRun
             updatedAt: Coerce::dateTime($obj['updated_at'] ?? null),
             participants: $participants,
             raw: $obj,
+            privateSlugs: $privateSlugs,
         );
     }
 }

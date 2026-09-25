@@ -12,6 +12,7 @@ use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\Response;
 use Allus\CompanyData\Http\Transport;
 use Allus\CompanyData\Model\Coerce;
+use Allus\CompanyData\Model\PluginValue;
 use Allus\CompanyData\Model\Value;
 
 /**
@@ -60,6 +61,22 @@ final class OAuthClient
     public static function fromEnv(?Transport $transport = null): self
     {
         return new self(Config::fromIdwEnv(), $transport ?? new CurlTransport());
+    }
+
+    /**
+     * Read a plugin claim's value.
+     *
+     * An app that declares a plugin claim receives its answer in `values[name]` as a
+     * self-describing JSON string — the plugin's name, the field type, the blocks (labels, picked
+     * ids and option labels, typed values) and the outputs. A plugin answer is always one-time: it
+     * is asked at every sign-in. It is what the person's client submitted — sealed to the app key
+     * but not signed; an app that must rely on an output checks it with the plugin itself.
+     *
+     * @throws \Allus\CompanyData\Errors\ValidationError when the value is not a JSON object with an `outputs` array
+     */
+    public static function parsePluginValue(string $value): PluginValue
+    {
+        return PluginValue::parse($value);
     }
 
     /**

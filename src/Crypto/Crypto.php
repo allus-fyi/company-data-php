@@ -45,24 +45,24 @@ final class Crypto
     public const GCM_IV_LEN = 12;
 
     /**
-     * Load an OpenSSL-encrypted PKCS#8 PEM into an in-memory RSA private key,
-     * pre-configured for OAEP-**SHA256** (MGF1-SHA256) unwrap of person values.
+     * Load a PKCS#8 PEM into an in-memory RSA private key, pre-configured for
+     * OAEP-**SHA256** (MGF1-SHA256) unwrap of person values.
      *
-     * The PEM is the OpenSSL-encrypted PKCS#8 you downloaded from the portal
-     * (PBES2 = PBKDF2-HMAC-SHA256 + AES-256-CBC, ~100k iters). phpseclib's
-     * PublicKeyLoader reads it given the passphrase; the key is never written
-     * back to disk in plaintext.
+     * The platform's key downloads are OpenSSL-encrypted PKCS#8 PEMs (PBES2 =
+     * PBKDF2-HMAC-SHA256 + AES-256-CBC, ~100k iters); phpseclib's PublicKeyLoader
+     * reads one given the passphrase. An UNENCRYPTED PKCS#8 PEM loads too — a plugin
+     * server's own key, for {@see pluginOpenRequest} — with the passphrase null or
+     * empty. The key is never written back to disk in plaintext.
      *
-     * Config-only key handling: this is the single place a passphrase is used,
-     * and it is driven by {@code Config::keyPassphrase} — never passed in by
-     * application code.
+     * Config-only key handling: the client roles use this only with the configured
+     * passphrase — never one passed in by application code.
      *
      * @throws DecryptError on a wrong passphrase / malformed PEM / non-RSA key.
      */
-    public static function loadPrivateKey(string $encryptedPem, string $passphrase): RSAPrivateKey
+    public static function loadPrivateKey(string $encryptedPem, ?string $passphrase): RSAPrivateKey
     {
         try {
-            $key = PublicKeyLoader::load($encryptedPem, $passphrase);
+            $key = PublicKeyLoader::load($encryptedPem, $passphrase === null || $passphrase === '' ? false : $passphrase);
         } catch (\Throwable $e) {
             // phpseclib throws NoKeyLoadedException for a wrong passphrase /
             // malformed PEM; surface it as a DecryptError.
@@ -307,5 +307,93 @@ final class Crypto
             return false;
         }
         return hash_equals($expectedHash, hash('sha256', $salt . $plaintext));
+    }
+
+    // ── plugin sealing ─────────────────────────────────────────────────────────────
+
+    /**
+     * A fresh RSA-2048 reply key pair → [OAEP-SHA256-configured private key, base64 SPKI of the
+     * public half]. A plugin seals its reply to the public half (the request's `reply_key`); only
+     * the caller holding the private half can open it.
+     *
+     * @return array{0: RSAPrivateKey, 1: string}
+     */
+    public static function generateReplyKeyPair(): array
+    {
+        /** @var RSAPrivateKey $key */
+        $key = RSA::createKey(2048);
+        /** @var RSAPublicKey $public */
+        $public = $key->getPublicKey();
+
+        return [self::asOaepSha256($key), self::exportPublicKeySpki($public)];
+    }
+
+    /** A public key as base64 SPKI (DER) — the form every platform key travels in. */
+    public static function exportPublicKeySpki(RSAPublicKey $publicKey): string
+    {
+        $pem = $publicKey->toString('PKCS8');
+
+        return (string) preg_replace('/-----[^-]+-----|\s+/', '', $pem);
+    }
+
+    /**
+     * For a PLUGIN'S OWN SERVER: open the body of a `POST {base_url}/call` → the request.
+     *
+     * `$body` is the call's JSON body `{"request": "<wrapper string>"}` (raw or decoded);
+     * `$privateKeyPem` is the plugin's own PKCS#8 PEM, encrypted (with `$passphrase`) or not
+     * (`null`). The request carries `field_type`, `op`, `block`, `query`, `picks`, `values`,
+     * `inputs` and the caller's `reply_key` — seal the answer to it with {@see pluginSealReply}.
+     * This is a function for the plugin's server, never a call on the allme API.
+     *
+     * @param string|array<string,mixed> $body
+     *
+     * @return array<string,mixed>
+     *
+     * @throws DecryptError when the body, the wrapper or the key is not usable, or the plaintext
+     *                      is not a JSON object. A plugin answers a request sealed to a key it no
+     *                      longer holds with `409 {"error":"key_unknown"}`.
+     */
+    public static function pluginOpenRequest(string|array $body, string $privateKeyPem, ?string $passphrase): array
+    {
+        if (is_string($body)) {
+            $decoded = json_decode($body, true);
+            if (!is_array($decoded)) {
+                throw new DecryptError('plugin call body is not a JSON object');
+            }
+            $body = $decoded;
+        }
+        $request = $body['request'] ?? null;
+        if (!is_string($request) && !is_array($request)) {
+            throw new DecryptError("plugin call body has no 'request' wrapper");
+        }
+        $plaintext = self::decrypt($request, self::loadPrivateKey($privateKeyPem, $passphrase));
+        $shape = json_decode($plaintext);
+        if (!$shape instanceof \stdClass) {
+            throw new DecryptError('plugin request plaintext is not a JSON object');
+        }
+        /** @var array<string,mixed> $opened */
+        $opened = json_decode($plaintext, true);
+
+        return $opened;
+    }
+
+    /**
+     * For a PLUGIN'S OWN SERVER: seal a reply to the request's `reply_key` → the response body
+     * `['reply' => '<wrapper string>']`.
+     *
+     * `$reply` is the reply plaintext — `{"options":[{id,label}],"more":bool}`,
+     * `{"outputs":{key: value|null}}` or `{"picks_invalid":true}`. It is encoded as given: pass an
+     * object (or `(object) []`) where the protocol wants a JSON object that may be empty.
+     *
+     * @param array<string,mixed>|object $reply
+     *
+     * @return array{reply: string}
+     */
+    public static function pluginSealReply(array|object $reply, string $replyKeySpki): array
+    {
+        $plaintext = json_encode($reply, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        $wrapper = self::encryptForPublicKey($plaintext, self::loadPublicKey($replyKeySpki));
+
+        return ['reply' => json_encode($wrapper, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)];
     }
 }

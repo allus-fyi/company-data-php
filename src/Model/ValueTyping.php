@@ -26,6 +26,7 @@ use Allus\CompanyData\Errors\DecryptError;
  *   primitive multilist         → array (a JSON array of option strings)
  *   primitive date              → DateTimeImmutable (falls back to the raw string)
  *   everything else             → string
+ * The reserved type key `plugin` is typed first, before the registry: a {@see PluginValue}.
  */
 final class ValueTyping
 {
@@ -37,9 +38,10 @@ final class ValueTyping
      * @param callable(array<string,mixed>|string): string $decryptValue closure over the service key.
      * @param (callable(string): (array<string,mixed>|string))|null $binaryFetch slot file fetch.
      *
-     * @return string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|null
+     * @return string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|PluginValue|null
      *
      * @throws DecryptError
+     * @throws \Allus\CompanyData\Errors\ValidationError a plugin value that is not a finished plugin answer
      */
     public static function typed(
         array $obj,
@@ -47,8 +49,21 @@ final class ValueTyping
         callable $fieldTypes,
         callable $decryptValue,
         ?callable $binaryFetch = null,
-    ): string|array|\DateTimeImmutable|BinaryHandle|null {
+    ): string|array|\DateTimeImmutable|BinaryHandle|PluginValue|null {
         $ftype = strtolower($fieldType ?? '');
+
+        // The type key `plugin` is reserved and never a registry row: a plugin answer is a
+        // self-describing JSON object, typed here before the registry is consulted.
+        if ($ftype === 'plugin') {
+            if (!array_key_exists('value', $obj) || $obj['value'] === null) {
+                return null;
+            }
+            /** @var array<string,mixed>|string $cipher */
+            $cipher = $obj['value'];
+
+            return PluginValue::parse($decryptValue($cipher));
+        }
+
         $registry = $fieldTypes();
         $definition = $registry->resolve($ftype);
 

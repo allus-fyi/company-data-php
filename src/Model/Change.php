@@ -20,7 +20,7 @@ use Allus\CompanyData\Crypto\BinaryHandle;
 final class Change
 {
     /**
-     * @param string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|null $value
+     * @param string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|PluginValue|null $value
      * @param array<string,mixed> $raw
      */
     public function __construct(
@@ -32,7 +32,7 @@ final class Change
         /** The customer's TYPE: "person"|"company" (B2B); null on older API. */
         public readonly ?string $customerType = null,
         public readonly ?string $slug = null,
-        public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value = null,
+        public readonly string|array|\DateTimeImmutable|BinaryHandle|PluginValue|null $value = null,
         public readonly ?bool $live = null,
         /** Set on document_status_changed. */
         public readonly ?string $documentId = null,

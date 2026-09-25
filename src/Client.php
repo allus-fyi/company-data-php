@@ -19,6 +19,10 @@ use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Model\FlowRun;
 use Allus\CompanyData\Model\LogEntry;
+use Allus\CompanyData\Model\PluginOptions;
+use Allus\CompanyData\Model\PluginOutputs;
+use Allus\CompanyData\Model\PluginPass;
+use Allus\CompanyData\Model\PluginPicksInvalid;
 use Allus\CompanyData\Model\RequestField;
 use Allus\CompanyData\Pump\Logger;
 use Allus\CompanyData\Pump\NullLogger;
@@ -1426,6 +1430,11 @@ final class Client
      * {@code generating} — call {@see generateFlowDocument()} (or {@see processFlowRun()}, which
      * chains it).
      *
+     * A value below its field's `min` or above its `max` — each computed over the run's answers,
+     * this fill and the flow's constants — is refused with a {@see ValidationError} naming the
+     * bound before anything is encrypted. A value whose field's default reads another party's
+     * private source is submitted marked `source_private`.
+     *
      * @param array<string,mixed>        $fill
      * @param array<string,RSAPublicKey> $partyPubKeys supply to skip the share_code → /api/keys lookup.
      */
@@ -1434,6 +1443,10 @@ final class Client
         $answersSoFar = $this->decryptRunAnswers($run);
         $full = array_merge($answersSoFar, $fill);
         $svcPub = $this->servicePublicKey();
+        // Bounds read the same live answer map the plugin calls read: stored answers, this fill as
+        // the current step's draft, plugin answers expanded, constants computed.
+        $view = $this->flowPartyView($run);
+        $live = FlowPlugins::liveAnswerMap($view, $fill);
 
         $answersOut = [];
         foreach ($fill as $slug => $val) {
@@ -1459,6 +1472,7 @@ final class Client
                     throw new ValidationError((string) $slug, $ftype);
                 }
             }
+            FlowPlugins::checkBounds($run->definition, (string) $slug, $val, $live, $run->referenceDate);
             $values = [];
             foreach ($run->bindings as $uid) {
                 $key = ($uid === $run->serviceUserId())
@@ -1466,7 +1480,13 @@ final class Client
                     : $this->flowPersonPublicKey($run, $uid, $partyPubKeys);
                 $values[] = ['for_user_id' => $uid, 'value' => Crypto::encryptForPublicKey($plain, $key)];
             }
-            $answersOut[] = ['slug' => $slug, 'values' => $values];
+            $answer = ['slug' => $slug, 'values' => $values];
+            // A value whose field's default reads another party's private source is private too,
+            // so every later reader treats it as one.
+            if (FlowPlugins::isDraftPrivate($view, (string) $slug, $fill)) {
+                $answer['source_private'] = true;
+            }
+            $answersOut[] = $answer;
         }
 
         [$leaf, $nextNode] = self::computeNextNode($run->definition, $run->currentNode, $full, $run->referenceDate);
@@ -1479,6 +1499,117 @@ final class Client
         }
         $res = $this->http->post(self::FLOW_RUNS . '/' . rawurlencode((string) $run->id) . '/answers', $body);
         return FlowRun::fromApi(is_array($res) ? $res : []);
+    }
+
+    // ── plugin fields on the company's turn ───────────────────────────────────
+
+    /**
+     * This party's view of a run: its readable answers, the privacy list, its own party keys.
+     *
+     * @return array{definition: array<string,mixed>, currentNode: ?string, referenceDate: ?string, stored: array<string,mixed>, privateSlugs: ?list<string>, ownPartyKeys: list<string>}
+     */
+    private function flowPartyView(FlowRun $run): array
+    {
+        $own = [];
+        foreach ($run->bindings as $key => $uid) {
+            if ($uid === $run->serviceUserId()) {
+                $own[] = (string) $key;
+            }
+        }
+
+        return [
+            'definition' => $run->definition,
+            'currentNode' => $run->currentNode,
+            'referenceDate' => $run->referenceDate,
+            'stored' => $this->decryptRunAnswers($run),
+            'privateSlugs' => $run->privateSlugs,
+            'ownPartyKeys' => $own,
+        ];
+    }
+
+    /**
+     * Refuse a value outside its flow field's `min`/`max` without submitting anything.
+     *
+     * The bounds are computed over the live answer map: the run's answers, overlaid with `$draft`
+     * — the current step's other not-yet-submitted answers — and `$value` for `$slug`, plugin
+     * answers expanded, constants computed. A bound that computes to null is no bound.
+     * {@see submitFlowAnswers()} applies the same check to every value it submits.
+     *
+     * @param array<string,mixed> $draft
+     *
+     * @throws ValidationError naming the bound
+     */
+    public function checkFlowValue(FlowRun $run, string $slug, mixed $value, array $draft = []): void
+    {
+        $draft[$slug] = $value;
+        $live = FlowPlugins::liveAnswerMap($this->flowPartyView($run), $draft);
+        FlowPlugins::checkBounds($run->definition, $slug, $value, $live, $run->referenceDate);
+    }
+
+    /**
+     * A pass for the plugin fields of the run's current step —
+     * `POST /api/company-data/flow-runs/{runId}/plugin-pass`. Issued only while the run awaits the
+     * company's party on that step; it lives ten minutes. {@see pluginOptions()} and
+     * {@see pluginOutputs()} fetch one themselves.
+     */
+    public function pluginPass(string $runId): PluginPass
+    {
+        return PluginPass::fromApi($this->http->post(self::FLOW_RUNS . '/' . rawurlencode($runId) . '/plugin-pass'));
+    }
+
+    /**
+     * Ask the plugin behind the current step's plugin field `$slug` for the options of one block.
+     *
+     * `$query` is the search text (`''` lists everything), `$picks` the ids picked so far by block
+     * key, `$values` the typed block values so far, and `$draft` the current step's
+     * not-yet-submitted answers (slug => plaintext) the plugin's inputs may read. Inputs come from
+     * the run's answers overlaid with `$draft`, plugin answers expanded, constants computed;
+     * another party's private value is never sent ({@see \Allus\CompanyData\Errors\PluginInputUnavailable}).
+     * The call goes to the forwarder over a plain transport, sealed to the plugin's key, with a
+     * fresh reply key.
+     *
+     * @param array<string,string> $picks
+     * @param array<string,mixed>  $values
+     * @param array<string,mixed>  $draft
+     */
+    public function pluginOptions(string $runId, string $slug, string $block, string $query = '', array $picks = [], array $values = [], array $draft = []): PluginOptions
+    {
+        $run = $this->flowRun($runId);
+        $pass = $this->pluginPass($runId);
+        $call = FlowPlugins::prepareCall($this->flowPartyView($run), $pass, $slug, $draft);
+        $reply = FlowPlugins::callPlugin($pass, fn (): PluginPass => $this->pluginPass($runId), $call, [
+            'op' => 'options',
+            'block' => $block,
+            'query' => $query,
+            'picks' => $picks,
+            'values' => $values,
+        ]);
+
+        return PluginOptions::fromReply($reply);
+    }
+
+    /**
+     * Ask the plugin behind plugin field `$slug` for its outputs for `$picks` and `$values` → a
+     * {@see PluginOutputs}, or {@see PluginPicksInvalid} when the picks no longer fit the inputs or
+     * each other (clear them and pick again). Same inputs, `$draft` and privacy rule as
+     * {@see pluginOptions()}. A caller that changes an input calls this again before it submits.
+     *
+     * @param array<string,string> $picks
+     * @param array<string,mixed>  $values
+     * @param array<string,mixed>  $draft
+     */
+    public function pluginOutputs(string $runId, string $slug, array $picks = [], array $values = [], array $draft = []): PluginOutputs|PluginPicksInvalid
+    {
+        $run = $this->flowRun($runId);
+        $pass = $this->pluginPass($runId);
+        $call = FlowPlugins::prepareCall($this->flowPartyView($run), $pass, $slug, $draft);
+        $reply = FlowPlugins::callPlugin($pass, fn (): PluginPass => $this->pluginPass($runId), $call, [
+            'op' => 'outputs',
+            'picks' => $picks,
+            'values' => $values,
+        ]);
+
+        return FlowPlugins::outputsResult($reply);
     }
 
     /**
@@ -1678,8 +1809,8 @@ final class Client
 
     /**
      * The next node after $fromKey: ordered outgoing edges, first match wins.
-     * Conditions use the answers plus computed constants at the run reference date.
-     * No matching outgoing edge means a leaf.
+     * Conditions use the answers — plugin answers expanded — plus computed constants at the run
+     * reference date. No matching outgoing edge means a leaf.
      *
      * @param array<string,mixed> $definition
      * @param array<string,mixed> $answers
@@ -1701,7 +1832,11 @@ final class Client
         }
         usort($edges, static fn (array $a, array $b): int => ((float) ($a['sort'] ?? 0)) <=> ((float) ($b['sort'] ?? 0)));
         $constants = is_array($definition['constants'] ?? null) ? $definition['constants'] : [];
-        $materialized = FlowCondition::computeConstants($constants, $answers, $referenceDate);
+        $materialized = FlowCondition::computeConstants(
+            $constants,
+            FlowCondition::expandPluginAnswers($answers, FlowPlugins::pluginSlugsOf($definition)),
+            $referenceDate,
+        );
         foreach ($edges as $e) {
             if (FlowCondition::evaluate($e['condition'] ?? null, $materialized)) {
                 return [false, isset($e['to']) ? (string) $e['to'] : null];

@@ -17,11 +17,11 @@ use Allus\CompanyData\Crypto\BinaryHandle;
 final class Value
 {
     /**
-     * @param string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|null $value
+     * @param string|array<string,mixed>|\DateTimeImmutable|BinaryHandle|PluginValue|null $value
      * @param array<string,mixed> $raw
      */
     public function __construct(
-        public readonly string|array|\DateTimeImmutable|BinaryHandle|null $value,
+        public readonly string|array|\DateTimeImmutable|BinaryHandle|PluginValue|null $value,
         public readonly bool $live,
         public readonly ?\DateTimeImmutable $updatedAt = null,
         /** True iff the hash recomputes over the plaintext AND the verification has not lapsed. */

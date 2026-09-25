@@ -236,7 +236,7 @@ final class FlowCondition
     // into a NEW slug=>value map (answers + [key=>value]) in dependency order, so the evaluator's
     // leaf path ['field'=><key>] references a constant with zero change. null propagates: an
     // unresolved operand yields null; a null constant behaves like an unanswered field.
-    // Pinned by testdata/contract-flow-constants-vector.json (51 cases).
+    // Pinned by testdata/contract-flow-constants-vector.json (62 cases).
 
     /**
      * Materialise every constant into a NEW map = $answers + [key => value], evaluated in
@@ -296,14 +296,20 @@ final class FlowCondition
      * Convenience: just the resolved constant values (key => value, one entry per constant),
      * WITHOUT the original answers folded in.
      *
+     * `$pluginSlugs` — the definition's plugin element slugs — expands every plugin answer first
+     * (expandPluginAnswers), so a constant can read `slug`, `slug.<block>` and `slug.<output>`;
+     * omit it when the flow has no plugin element.
+     *
      * @param list<mixed>         $constants
      * @param array<string,mixed> $answers
+     * @param list<string>|null   $pluginSlugs
      *
      * @return array<string,mixed>
      */
-    public static function resolvedConstants(array $constants, array $answers, ?string $referenceDate): array
+    public static function resolvedConstants(array $constants, array $answers, ?string $referenceDate, ?array $pluginSlugs = null): array
     {
-        $full = self::computeConstants($constants, $answers, $referenceDate);
+        $source = $pluginSlugs !== null ? self::expandPluginAnswers($answers, $pluginSlugs) : $answers;
+        $full = self::computeConstants($constants, $source, $referenceDate);
         $out = [];
         foreach ($constants as $c) {
             if (is_array($c) && is_string($c['key'] ?? null)) {
@@ -476,6 +482,24 @@ final class FlowCondition
                 };
 
             case 'math':
+                // max/min are variadic and skip what is not a number: only the args that coerce to
+                // a FINITE number take part, so a null or text arg never nulls the whole result.
+                // They run before the null guard below for exactly that reason; no numeric arg at
+                // all -> null.
+                if (($expr['op'] ?? null) === 'max' || ($expr['op'] ?? null) === 'min') {
+                    $found = [];
+                    foreach ((is_array($expr['args'] ?? null) ? $expr['args'] : []) as $a) {
+                        $n = self::toNum(self::evalExpr($a, $answers, $referenceDate));
+                        if ($n !== null && is_finite($n)) {
+                            $found[] = $n;
+                        }
+                    }
+                    if ($found === []) {
+                        return null;
+                    }
+
+                    return $expr['op'] === 'max' ? max($found) : min($found);
+                }
                 $nums = [];
                 foreach ((is_array($expr['args'] ?? null) ? $expr['args'] : []) as $a) {
                     $n = self::toNum(self::evalExpr($a, $answers, $referenceDate));
@@ -574,5 +598,275 @@ final class FlowCondition
         }
 
         return $n;
+    }
+
+    // ── Plugin answers. Pure; pinned by the shared constants vector. ───────────────────────────
+    // A plugin answer's plaintext is a self-describing JSON object:
+    //   {"plugin","type","blocks":[{key,kind,label,id?,value}],"outputs":[{key,type,label,value}]}
+    // An answer without an `outputs` array is unfinished.
+
+    private const PLUGIN_KEY = '/^[a-z][a-z0-9_]{0,39}$/';
+
+    /**
+     * The plaintext parsed as a JSON object (assoc) plus whether it carries an `outputs` ARRAY, or
+     * null when it is not a string holding a JSON object. The object/array distinction is read
+     * from an object-mode decode, since an assoc decode cannot tell `{}` from `[]`.
+     *
+     * @return array{0: array<string,mixed>, 1: bool}|null
+     */
+    private static function parsePluginObject(mixed $plaintext): ?array
+    {
+        if (!is_string($plaintext)) {
+            return null;
+        }
+        $shape = json_decode($plaintext);
+        if (!$shape instanceof \stdClass) {
+            return null;
+        }
+        $assoc = json_decode($plaintext, true);
+
+        return [is_array($assoc) ? $assoc : [], property_exists($shape, 'outputs') && is_array($shape->outputs)];
+    }
+
+    private static function pluginKeyOk(mixed $key): bool
+    {
+        return is_string($key) && $key !== 'id' && preg_match(self::PLUGIN_KEY, $key) === 1;
+    }
+
+    /** @param array<string,mixed> $answer */
+    private static function pluginSummary(array $answer): string
+    {
+        $parts = [];
+        foreach ((is_array($answer['blocks'] ?? null) ? $answer['blocks'] : []) as $b) {
+            $parts[] = self::str(is_array($b) ? ($b['value'] ?? null) : null);
+        }
+
+        return implode(' / ', $parts);
+    }
+
+    /**
+     * Expand every plugin answer of $answers into the keys a condition, a constant or a bound
+     * reads.
+     *
+     * Returns a NEW map. For each slug of $pluginSlugs whose answer is a string: a value that is
+     * not a JSON object is left as it is; a JSON object without an `outputs` array is an
+     * unfinished answer and its entry is REMOVED; a finished one is replaced by its summary (the
+     * blocks' values joined by " / ") and adds `slug.<block>` (the block's stored value),
+     * `slug.<block>.id` (a `search_select` block's picked id, as a string) and `slug.<output>`
+     * (the output's typed value). A block or output key that is `id` or does not match
+     * `^[a-z][a-z0-9_]{0,39}$`, and a null value, add nothing. A slug not in $pluginSlugs is never
+     * touched.
+     *
+     * @param array<string,mixed> $answers
+     * @param list<string>        $pluginSlugs
+     *
+     * @return array<string,mixed>
+     */
+    public static function expandPluginAnswers(array $answers, array $pluginSlugs): array
+    {
+        $out = $answers;
+        foreach ($pluginSlugs as $slug) {
+            if (!is_string($slug) || !array_key_exists($slug, $out)) {
+                continue;
+            }
+            $parsed = self::parsePluginObject($out[$slug]);
+            if ($parsed === null) {
+                continue;
+            }
+            [$answer, $finished] = $parsed;
+            if (!$finished) {
+                unset($out[$slug]);
+                continue;
+            }
+            $out[$slug] = self::pluginSummary($answer);
+            foreach ((is_array($answer['blocks'] ?? null) ? $answer['blocks'] : []) as $b) {
+                if (!is_array($b) || !self::pluginKeyOk($b['key'] ?? null)) {
+                    continue;
+                }
+                $key = $b['key'];
+                if (($b['value'] ?? null) !== null) {
+                    $out[$slug . '.' . $key] = $b['value'];
+                }
+                if (($b['kind'] ?? null) === 'search_select' && ($b['id'] ?? null) !== null) {
+                    $out[$slug . '.' . $key . '.id'] = self::str($b['id']);
+                }
+            }
+            foreach ((is_array($answer['outputs'] ?? null) ? $answer['outputs'] : []) as $o) {
+                if (!is_array($o) || !self::pluginKeyOk($o['key'] ?? null)) {
+                    continue;
+                }
+                if (($o['value'] ?? null) !== null) {
+                    $out[$slug . '.' . $o['key']] = $o['value'];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /** A plugin answer's summary (its blocks' values joined by " / "), or null when it is unfinished or not one. */
+    public static function pluginAnswerSummary(mixed $plaintext): ?string
+    {
+        $parsed = self::parsePluginObject($plaintext);
+        if ($parsed === null || !$parsed[1]) {
+            return null;
+        }
+
+        return self::pluginSummary($parsed[0]);
+    }
+
+    /**
+     * A plugin answer for display — ['blocks' => [[label, value]], 'outputs' => [[label, type,
+     * value]]] in stored order (a `search_select` block's value is its option label) — or null
+     * when the plaintext is not a JSON object with an `outputs` array.
+     *
+     * @return array{blocks: list<array{label: mixed, value: mixed}>, outputs: list<array{label: mixed, type: mixed, value: mixed}>}|null
+     */
+    public static function pluginAnswerView(mixed $plaintext): ?array
+    {
+        $parsed = self::parsePluginObject($plaintext);
+        if ($parsed === null || !$parsed[1]) {
+            return null;
+        }
+        [$answer] = $parsed;
+        $blocks = [];
+        foreach ((is_array($answer['blocks'] ?? null) ? $answer['blocks'] : []) as $b) {
+            $blocks[] = ['label' => is_array($b) ? ($b['label'] ?? null) : null, 'value' => is_array($b) ? ($b['value'] ?? null) : null];
+        }
+        $outputs = [];
+        foreach ((is_array($answer['outputs'] ?? null) ? $answer['outputs'] : []) as $o) {
+            $outputs[] = [
+                'label' => is_array($o) ? ($o['label'] ?? null) : null,
+                'type' => is_array($o) ? ($o['type'] ?? null) : null,
+                'value' => is_array($o) ? ($o['value'] ?? null) : null,
+            ];
+        }
+
+        return ['blocks' => $blocks, 'outputs' => $outputs];
+    }
+
+    // ── Helpers the SDK's own flow code reads. ─────────────────────────────────────────────
+
+    /**
+     * Evaluate one constants-language expression over an answer map (a default, a min or a max).
+     *
+     * @param array<string,mixed> $answers
+     *
+     * @internal
+     */
+    public static function evaluateExpression(mixed $expr, array $answers, ?string $referenceDate): mixed
+    {
+        return self::evalExpr($expr, $answers, $referenceDate);
+    }
+
+    /**
+     * The evaluator's own number coercion: a finite number, a numeric string, else null.
+     *
+     * @internal
+     */
+    public static function flowNumber(mixed $v): ?float
+    {
+        $n = self::toNum($v);
+
+        return ($n !== null && is_finite($n)) ? $n : null;
+    }
+
+    /**
+     * The evaluator's strict YYYY-MM-DD reading as a UTC-midnight timestamp, or null.
+     *
+     * @internal
+     */
+    public static function flowDateTimestamp(mixed $v): ?int
+    {
+        $d = self::parseFlowDate($v);
+
+        return $d === null ? null : $d->getTimestamp();
+    }
+
+    /**
+     * The evaluator's own stringification.
+     *
+     * @internal
+     */
+    public static function flowString(mixed $v): string
+    {
+        return self::str($v);
+    }
+
+    /**
+     * Every key an expression reads: its `ref` keys and the fields of its `if` conditions.
+     *
+     * @return list<string>
+     *
+     * @internal
+     */
+    public static function exprRefs(mixed $expr): array
+    {
+        $acc = [];
+        self::walkRefs($expr, $acc);
+
+        return array_keys($acc);
+    }
+
+    /** @param array<string,bool> $acc */
+    private static function walkRefs(mixed $node, array &$acc): void
+    {
+        if (!is_array($node)) {
+            return;
+        }
+        switch ($node['type'] ?? null) {
+            case 'ref':
+                if (is_string($node['key'] ?? null)) {
+                    $acc[$node['key']] = true;
+                }
+
+                return;
+            case 'if':
+                foreach ((is_array($node['cases'] ?? null) ? $node['cases'] : []) as $cs) {
+                    if (is_array($cs)) {
+                        self::walkCondRefs($cs['when'] ?? null, $acc);
+                        self::walkRefs($cs['then'] ?? null, $acc);
+                    }
+                }
+                self::walkRefs($node['else'] ?? null, $acc);
+
+                return;
+            case 'concat':
+                foreach ((is_array($node['parts'] ?? null) ? $node['parts'] : []) as $p) {
+                    self::walkRefs($p, $acc);
+                }
+
+                return;
+            case 'datediff':
+                self::walkRefs($node['from'] ?? null, $acc);
+                self::walkRefs($node['to'] ?? null, $acc);
+
+                return;
+            case 'math':
+                foreach ((is_array($node['args'] ?? null) ? $node['args'] : []) as $a) {
+                    self::walkRefs($a, $acc);
+                }
+
+                return;
+        }
+    }
+
+    /** @param array<string,bool> $acc */
+    private static function walkCondRefs(mixed $cond, array &$acc): void
+    {
+        if (!is_array($cond)) {
+            return;
+        }
+        $op = $cond['op'] ?? null;
+        if ($op === 'and' || $op === 'or' || $op === 'not') {
+            foreach ((is_array($cond['children'] ?? null) ? $cond['children'] : []) as $ch) {
+                self::walkCondRefs($ch, $acc);
+            }
+
+            return;
+        }
+        if (is_string($cond['field'] ?? null)) {
+            $acc[$cond['field']] = true;
+        }
     }
 }

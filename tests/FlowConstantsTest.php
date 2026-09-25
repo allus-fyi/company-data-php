@@ -17,7 +17,7 @@ final class FlowConstantsTest extends TestCase
 {
     private const VECTOR = __DIR__ . '/../testdata/contract-flow-constants-vector.json';
 
-    /** @return array<string, array{0:string, 1:list<mixed>, 2:array<string,mixed>, 3:?string, 4:array<string,mixed>}> */
+    /** @return array<string, array{0:string, 1:list<mixed>, 2:array<string,mixed>, 3:?string, 4:array<string,mixed>, 5:?list<string>}> */
     public static function cases(): array
     {
         $raw = file_get_contents(self::VECTOR);
@@ -32,7 +32,8 @@ final class FlowConstantsTest extends TestCase
             $answers = is_array($c['answers'] ?? null) ? $c['answers'] : [];
             $refDate = isset($c['reference_date']) ? (string) $c['reference_date'] : null;
             $expect = is_array($c['expect'] ?? null) ? $c['expect'] : [];
-            $out[(string) $c['name']] = [(string) $c['name'], $constants, $answers, $refDate, $expect];
+            $pluginSlugs = is_array($c['plugin_slugs'] ?? null) ? array_values($c['plugin_slugs']) : null;
+            $out[(string) $c['name']] = [(string) $c['name'], $constants, $answers, $refDate, $expect, $pluginSlugs];
         }
         return $out;
     }
@@ -41,21 +42,31 @@ final class FlowConstantsTest extends TestCase
      * @param list<mixed>         $constants
      * @param array<string,mixed> $answers
      * @param array<string,mixed> $expect
+     * @param list<string>|null   $pluginSlugs a case may carry `plugin_slugs`: its answers are
+     *                                         expanded before the constants are computed, and
+     *                                         `expect` may then name expanded answer keys too
      *
      * @dataProvider cases
      */
-    public function testVectorCase(string $name, array $constants, array $answers, ?string $refDate, array $expect): void
+    public function testVectorCase(string $name, array $constants, array $answers, ?string $refDate, array $expect, ?array $pluginSlugs): void
     {
-        $result = FlowCondition::computeConstants($constants, $answers, $refDate);
+        $source = $pluginSlugs !== null ? FlowCondition::expandPluginAnswers($answers, $pluginSlugs) : $answers;
+        $result = FlowCondition::computeConstants($constants, $source, $refDate);
         foreach ($expect as $key => $want) {
             self::assertArrayHasKey($key, $result, "$name: missing constant '$key'");
             self::assertVectorEquals($want, $result[$key], "$name: constant '$key'");
+        }
+        $resolved = FlowCondition::resolvedConstants($constants, $answers, $refDate, $pluginSlugs);
+        foreach ($resolved as $key => $got) {
+            if (array_key_exists($key, $expect)) {
+                self::assertVectorEquals($expect[$key], $got, "$name: resolvedConstants '$key'");
+            }
         }
     }
 
     public function testVectorHasAllCases(): void
     {
-        self::assertCount(51, self::cases());
+        self::assertCount(62, self::cases());
     }
 
     /**
