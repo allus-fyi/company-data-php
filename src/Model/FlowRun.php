@@ -46,9 +46,9 @@ final class FlowRun
         public readonly ?\DateTimeImmutable $createdAt,
         public readonly ?\DateTimeImmutable $updatedAt,
         /**
-         * Every party the run binds, the owning company included (flows.html §5a/§9 item 12).
-         * {@see $connectionId} above names only the PRIMARY counterparty, so a multi-actor run's
-         * other counterparties are reachable only here.
+         * Every bound party, including the owning company.
+         * The top-level connection id is the customer caller's own connection on customer reads;
+         * service-owner reads carry the primary counterparty's connection.
          */
         public readonly array $participants = [],
         public readonly array $raw = [],
