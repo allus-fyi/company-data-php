@@ -1469,7 +1469,7 @@ final class Client
             $answersOut[] = ['slug' => $slug, 'values' => $values];
         }
 
-        [$leaf, $nextNode] = self::computeNextNode($run->definition, $run->currentNode, $full);
+        [$leaf, $nextNode] = self::computeNextNode($run->definition, $run->currentNode, $full, $run->referenceDate);
         $body = ['answers' => $answersOut];
         if ($leaf) {
             $body['leaf'] = true;
@@ -1533,7 +1533,7 @@ final class Client
         $answers = $this->decryptRunAnswers($run);
         $fill = $fillNode($node, $answers) ?? [];
         $merged = array_merge($answers, $fill);
-        [$wasLeaf] = self::computeNextNode($run->definition, $run->currentNode, $merged);
+        [$wasLeaf] = self::computeNextNode($run->definition, $run->currentNode, $merged, $run->referenceDate);
         $run = $this->submitFlowAnswers($run, $fill, $partyPubKeys);
         $mode = $run->outputMode ?? (isset($run->definition['output_mode']) ? (string) $run->definition['output_mode'] : null);
         if ($wasLeaf && $mode === 'document') {
@@ -1677,15 +1677,16 @@ final class Client
     }
 
     /**
-     * The next node after {@code $fromKey} — ordered outgoing edges, first match wins. Leaf is true
-     * when there is no outgoing edge or none matched (a dead-end is a leaf, matching the platform).
+     * The next node after $fromKey: ordered outgoing edges, first match wins.
+     * Conditions use the answers plus computed constants at the run reference date.
+     * No matching outgoing edge means a leaf.
      *
      * @param array<string,mixed> $definition
      * @param array<string,mixed> $answers
      *
      * @return array{0: bool, 1: ?string} [leaf, nextNode]
      */
-    private static function computeNextNode(array $definition, ?string $fromKey, array $answers): array
+    private static function computeNextNode(array $definition, ?string $fromKey, array $answers, ?string $referenceDate): array
     {
         $edges = [];
         if (is_array($definition['edges'] ?? null)) {
@@ -1699,8 +1700,10 @@ final class Client
             return [true, null];
         }
         usort($edges, static fn (array $a, array $b): int => ((float) ($a['sort'] ?? 0)) <=> ((float) ($b['sort'] ?? 0)));
+        $constants = is_array($definition['constants'] ?? null) ? $definition['constants'] : [];
+        $materialized = FlowCondition::computeConstants($constants, $answers, $referenceDate);
         foreach ($edges as $e) {
-            if (FlowCondition::evaluate($e['condition'] ?? null, $answers)) {
+            if (FlowCondition::evaluate($e['condition'] ?? null, $materialized)) {
                 return [false, isset($e['to']) ? (string) $e['to'] : null];
             }
         }
