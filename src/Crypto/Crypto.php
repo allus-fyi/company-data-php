@@ -254,6 +254,37 @@ final class Crypto
     }
 
     /**
+     * The one-time-key bundle a flow run's `/generate` takes: the WHOLE answer map, sealed under a
+     * key used once and never stored. `$answers` is `[slug => plaintext]` (a non-string value is
+     * JSON-encoded). A random 32-byte AES-256-GCM key encrypts `JSON($answers)`; the result is
+     * packed `iv(12) . ciphertext . tag(16)` and both halves are base64-encoded → `[otk, values]`.
+     * The server evaluates every leaf-PDF condition, constant and `{{tag}}` over this map, so a slug
+     * missing from it prints blank on the contract.
+     *
+     * @param array<string,mixed> $answers
+     * @return array{otk: string, values: string}
+     *
+     * @throws DecryptError on an unexpected AES-GCM failure.
+     */
+    public static function oneTimeKeyBundle(array $answers): array
+    {
+        $strMap = [];
+        foreach ($answers as $k => $v) {
+            $strMap[$k] = is_string($v) ? $v : json_encode($v, JSON_THROW_ON_ERROR);
+        }
+        $payload = json_encode($strMap, JSON_THROW_ON_ERROR);
+        $otk = random_bytes(32);
+        $iv = random_bytes(self::GCM_IV_LEN);
+        $tag = '';
+        $ct = openssl_encrypt($payload, 'aes-256-gcm', $otk, OPENSSL_RAW_DATA, $iv, $tag, '', self::GCM_TAG_LEN);
+        if ($ct === false) {
+            throw new DecryptError('AES-256-GCM encryption failed for flow generate payload');
+        }
+
+        return ['otk' => base64_encode($otk), 'values' => base64_encode($iv . $ct . $tag)];
+    }
+
+    /**
      * AES-256-GCM decrypt, splitting the trailing {@see GCM_TAG_LEN}-byte tag off
      * the ciphertext (the platform layout). Returns false on a tag mismatch.
      */

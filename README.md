@@ -537,6 +537,20 @@ identity(): array                             // #491 gap 3 — this client's {c
 * `flowRunDocument($runId)` downloads the company's own service-key-encrypted copy of a run's generated contract and returns the plaintext file bytes (`404` until the run generates a document) — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument`).
 * `identity()` returns this client's `{company_user_id, service_id}` from `GET /api/company-data/whoami`, so a `triggerFlowRun` binding's **company** party can bind to `company_user_id` (the person party's user_id comes from the connection).
 
+**The party that answers a run's last step generates the contract — the customer role included.**
+When your company is a CUSTOMER of another company's service and its answer completes a document-mode
+leaf, the run parks at `generating` until you generate:
+
+```php
+$customer->generateFlowDocument(string $connectionId, FlowRun $run): mixed   // POST /api/company-connections/{connectionId}/flow-runs/{runId}/generate
+```
+
+Pass the run as re-read after your leaf submit. The answer map comes from your OWN copy of the run's
+answers, decrypted with the account key — every party's answers are sealed to every bound party, so
+that copy holds the whole run and no service key is involved. Returns `[document_id, documents,
+status]`; a repeat answers the same document set. Throws `ConfigError` when the run's current step is
+not bound to your company.
+
 > **Example:** a runnable website that drives a contract flow end-to-end through
 > these calls — trigger, type-checked step filling, a person turn on the phone, then
 > the decrypted answers + downloaded document — is in

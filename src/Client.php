@@ -1613,30 +1613,16 @@ final class Client
     }
 
     /**
-     * Document-mode company leaf: one-time-key value gather → POST /generate. Builds a random
-     * 32-byte AES-256-GCM key, encrypts {@code JSON([slug => plaintext])} of the company's decrypted
-     * answers, packs {@code iv(12) . ciphertext . tag(16)}, and POSTs {@code [otk, values]} (both
-     * base64). Returns the raw API response {@code [document_id, status]} (idempotent).
+     * Document-mode company leaf: one-time-key value gather → POST /generate. Seals the company's
+     * decrypted answers with {@see Crypto::oneTimeKeyBundle()} and POSTs {@code [otk, values]}.
+     * Returns the raw API response {@code [document_id, documents, status]} (idempotent — a repeat
+     * answers the same document set).
      *
      * @return array<string,mixed>|string
      */
     public function generateFlowDocument(FlowRun $run): array|string
     {
-        $answers = $this->decryptRunAnswers($run);
-        $strMap = [];
-        foreach ($answers as $k => $v) {
-            $strMap[$k] = is_string($v) ? $v : json_encode($v, JSON_THROW_ON_ERROR);
-        }
-        $payload = json_encode($strMap, JSON_THROW_ON_ERROR);
-        $otk = random_bytes(32);
-        $iv = random_bytes(12);
-        $tag = '';
-        $ct = openssl_encrypt($payload, 'aes-256-gcm', $otk, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
-        if ($ct === false) {
-            throw new DecryptError('AES-256-GCM encryption failed for flow generate payload');
-        }
-        $blob = $iv . $ct . $tag; // iv(12) . ciphertext . tag(16)
-        $body = ['otk' => base64_encode($otk), 'values' => base64_encode($blob)];
+        $body = Crypto::oneTimeKeyBundle($this->decryptRunAnswers($run));
         return $this->http->post(self::FLOW_RUNS . '/' . rawurlencode((string) $run->id) . '/generate', $body);
     }
 

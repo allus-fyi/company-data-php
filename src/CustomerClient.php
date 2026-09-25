@@ -28,7 +28,8 @@ use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
  * `CustomerClient` is what a connecting company uses to consume and answer another
  * company's service over its `acct_*` credentials: list company↔company connections,
  * provide/edit typed consent answers, read (and decrypt) issued documents, run contract
- * flows, drain the account change feed, and verify account-level webhooks. It reuses the
+ * flows — generating the contract of a run whose last step it answered — drain the account
+ * change feed, and verify account-level webhooks. It reuses the
  * same crash-safe {@see Pump}, webhook helpers, and hybrid-crypto core as the service
  * {@see Client}.
  *
@@ -405,6 +406,48 @@ final class CustomerClient
     public function declineFlowRun(string $connectionId, string $runId): mixed
     {
         return $this->http->post(self::CONN . '/' . $connectionId . '/flow-runs/' . $runId . '/decline');
+    }
+
+    /**
+     * Generate the contract of a document-mode run whose LEAF this company answered — `POST
+     * /api/company-connections/{id}/flow-runs/{runId}/generate`. The party that answers a run's last
+     * step generates. Submitting the leaf's answers leaves the run `generating`; pass the run as
+     * re-read then. The whole answer map comes from this company's OWN copy of the answers, opened
+     * with the account key — every party's answers are sealed to every bound party, so that copy
+     * holds the whole run and no service key is involved — and is sealed with
+     * {@see Crypto::oneTimeKeyBundle()}. Returns the raw API response `[document_id, documents,
+     * status]` (idempotent — a repeat answers the same document set).
+     *
+     * @throws ConfigError when the run's current step is not bound to this company — the participant
+     *     the run lists on `$connectionId`.
+     */
+    public function generateFlowDocument(string $connectionId, FlowRun $run): mixed
+    {
+        $ownUid = null;
+        foreach ($run->participants as $participant) {
+            if ($participant->connectionId === $connectionId) {
+                $ownUid = $participant->personUserId;
+                break;
+            }
+        }
+        // The step is checked before anything is decrypted: another party's copies do not open
+        // with the account key.
+        $step = $this->flowPartyView($run, false);
+        $bound = false;
+        foreach ($step['ownPartyKeys'] as $key) {
+            if ($ownUid !== null && $ownUid !== '' && ($run->bindings[$key] ?? null) === $ownUid) {
+                $bound = true;
+                break;
+            }
+        }
+        if (!$bound) {
+            throw new ConfigError('run ' . $run->id . ' is not at a step this company answered');
+        }
+
+        return $this->http->post(
+            self::CONN . '/' . $connectionId . '/flow-runs/' . $run->id . '/generate',
+            Crypto::oneTimeKeyBundle($this->flowPartyView($run)['stored']),
+        );
     }
 
     /**
