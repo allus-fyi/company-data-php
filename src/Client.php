@@ -23,6 +23,7 @@ use Allus\CompanyData\Model\PluginOptions;
 use Allus\CompanyData\Model\PluginOutputs;
 use Allus\CompanyData\Model\PluginPass;
 use Allus\CompanyData\Model\PluginPicksInvalid;
+use Allus\CompanyData\Model\PublishedFlow;
 use Allus\CompanyData\Model\RequestField;
 use Allus\CompanyData\Pump\Logger;
 use Allus\CompanyData\Pump\NullLogger;
@@ -1267,10 +1268,30 @@ final class Client
     // ── contract-flow runs (company side — the company is a bound party) ─────────
 
     /**
+     * The latest PUBLISHED version of a flow → {@see PublishedFlow} (version, definition and the
+     * service's request-field types). {@code GET /api/company-data/flows/{flowId}/published}.
+     */
+    public function publishedFlow(string $flowId): PublishedFlow
+    {
+        $body = $this->http->get(self::FLOWS . '/' . rawurlencode($flowId) . '/published');
+        return PublishedFlow::fromApi(is_array($body) ? $body : []);
+    }
+
+    /**
      * Start a run for a connection. {@code $bindings} = {@code [party_key => user_id]} covering the
-     * flow's parties (each bound user must be the company or the connected person). Pins the flow's
-     * latest PUBLISHED version. {@code $connectionId} is the person-side
-     * {@code company_service_connections.id} for this service.
+     * flow's parties (each bound user must be the company or the connected person).
+     * {@code $connectionId} is the person-side {@code company_service_connections.id} for this
+     * service.
+     *
+     * Reads the flow's latest published version ({@see publishedFlow()}) and pins it with
+     * {@code flow_version}. When that version's text elements show the connected customer's shared
+     * values ({@code {{party.field}}} tags), the SDK opens those values with the service key and
+     * seals them per recipient — one wrapper of the non-private values and one per private value, to
+     * the company (the service key) and to the customer — and sends them as {@code tag_values}. A
+     * newer publish in between ({@code flows.version_changed}) is re-read and retried once; a
+     * customer key that changed ({@code flows.tag_values_stale}) is re-read and retried once. A stale
+     * SERVICE key throws {@see ConfigError}: rebuild the client with the service's current private
+     * key.
      *
      * {@code $sourceFiles} = {@code [[source_key, for_user_id, file], …]}: one staged copy
      * ({@see stageRunFile}) per answered connection source ({@code conn:<party>:<request_slug>}) a rule
@@ -1284,19 +1305,128 @@ final class Client
      */
     public function triggerFlowRun(string $flowId, string $connectionId, array $bindings, array $sourceFiles = []): FlowRun
     {
-        $body = ['target' => ['connection_id' => $connectionId], 'bindings' => $bindings];
-        if ($sourceFiles !== []) {
-            $body['source_files'] = array_map(
-                static fn (array $s): array => [
-                    'source_key' => (string) $s['source_key'],
-                    'for_user_id' => (string) $s['for_user_id'],
-                    'file' => (string) $s['file'],
-                ],
-                array_values($sourceFiles),
-            );
+        $published = $this->publishedFlow($flowId);
+        $versionRetried = false;
+        $staleRetried = false;
+        while (true) {
+            $body = [
+                'target' => ['connection_id' => $connectionId],
+                'bindings' => $bindings,
+                'flow_version' => $published->version,
+            ];
+            if ($sourceFiles !== []) {
+                $body['source_files'] = array_map(
+                    static fn (array $s): array => [
+                        'source_key' => (string) $s['source_key'],
+                        'for_user_id' => (string) $s['for_user_id'],
+                        'file' => (string) $s['file'],
+                    ],
+                    array_values($sourceFiles),
+                );
+            }
+            $shareCode = null;
+            $tags = FlowText::nonOwnerPartyTags($published->definition);
+            if ($tags !== []) {
+                [$body['tag_values'], $shareCode] = $this->compileTagValues($tags, $published, $connectionId);
+            }
+            try {
+                $created = $this->http->post(self::FLOWS . '/' . rawurlencode($flowId) . '/runs', $body);
+                return FlowRun::fromApi(is_array($created) ? $created : []);
+            } catch (ApiError $e) {
+                if ($e->errorKey === 'flows.version_changed' && !$versionRetried) {
+                    $versionRetried = true;
+                    $published = $this->publishedFlow($flowId);
+                    continue;
+                }
+                if ($e->errorKey === 'flows.tag_values_stale') {
+                    $stale = is_array($e->details['stale'] ?? null) ? $e->details['stale'] : [];
+                    if (in_array('company', $stale, true)) {
+                        throw new ConfigError(
+                            'the configured service private key is not this service\'s current key — '
+                            . 'rebuild the client with the current service private key'
+                        );
+                    }
+                    if (!$staleRetried && $shareCode !== null) {
+                        $staleRetried = true;
+                        $this->invalidatePublicKey($shareCode);
+                        continue;
+                    }
+                }
+                throw $e;
+            }
         }
-        $created = $this->http->post(self::FLOWS . '/' . rawurlencode($flowId) . '/runs', $body);
-        return FlowRun::fromApi(is_array($created) ? $created : []);
+    }
+
+    /**
+     * The {@code tag_values} for one start, and the customer's share code: the connected customer's
+     * shared values the text names, opened with the service key and sealed to the company (the
+     * service key) and to the customer. A value that is absent or does not open is left out;
+     * {@code values_private} decides which are private (a slug it does not name is private).
+     *
+     * @param list<array{tag: string, party: string, field: string}> $tags
+     * @return array{0: array<string,mixed>, 1: string}
+     */
+    private function compileTagValues(array $tags, PublishedFlow $published, string $connectionId): array
+    {
+        $detail = $this->http->get(self::CONNECTIONS . '/' . rawurlencode($connectionId));
+        $detail = is_array($detail) ? $detail : [];
+        $userId = (string) ($detail['user_id'] ?? '');
+        $shareCode = (string) ($detail['share_code'] ?? '');
+        if ($userId === '' || $shareCode === '') {
+            throw new ConfigError("connection {$connectionId} has no customer key to seal the run's values to");
+        }
+        $values = is_array($detail['values'] ?? null) ? $detail['values'] : [];
+        $privacy = is_array($detail['values_private'] ?? null) ? $detail['values_private'] : [];
+        $entries = [];
+        foreach ($tags as $t) {
+            $wrapper = is_array($values[$t['field']] ?? null) ? ($values[$t['field']]['value'] ?? null) : null;
+            if (!is_string($wrapper) || $wrapper === '') {
+                continue;
+            }
+            try {
+                $v = Crypto::decrypt($wrapper, $this->privateKey);
+            } catch (\Throwable) {
+                continue;
+            }
+            if ($v === '') {
+                continue;
+            }
+            $entries[] = [
+                'tag' => $t['tag'],
+                'private' => ($privacy[$t['field']] ?? null) !== false,
+                'value' => ['v' => $v, 't' => $published->requestFieldTypes[$t['field']] ?? null],
+            ];
+        }
+        $seal = static fn (RSAPublicKey $key, string $text): string
+            => json_encode(Crypto::encryptForPublicKey($text, $key), JSON_THROW_ON_ERROR);
+        $recipient = static function (RSAPublicKey $key) use ($entries, $seal): array {
+            $public = [];
+            $private = [];
+            foreach ($entries as $e) {
+                if (!$e['private']) {
+                    $public[$e['tag']] = $e['value'];
+                } else {
+                    // One bound customer: every private value the text names is its own.
+                    $private[$e['tag']] = $seal($key, json_encode($e['value'], JSON_THROW_ON_ERROR));
+                }
+            }
+            $pem = (string) $key->toString('PKCS8');
+            $der = (string) base64_decode((string) preg_replace('/-----[^-]+-----|\s+/', '', $pem), true);
+
+            return [
+                'recipient_pubkey_sha256' => hash('sha256', $der),
+                'public' => $seal($key, json_encode((object) $public, JSON_THROW_ON_ERROR)),
+                'public_tags' => array_keys($public),
+                'private' => (object) $private,
+            ];
+        };
+
+        $customerKey = $this->recipientPublicKey($shareCode);
+
+        return [
+            ['company' => $recipient($this->servicePublicKey()), $userId => $recipient($customerKey)],
+            $shareCode,
+        ];
     }
 
     /**

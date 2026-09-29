@@ -155,7 +155,11 @@ final class FlowRunTest extends TestCase
     public function testTriggerFlowRun(): void
     {
         $captured = [];
-        $client = $this->clientRw($this->noGet(), function (string $method, string $url, ?string $body) use (&$captured): Response {
+        $published = function (string $url): Response {
+            self::assertStringEndsWith('/company-data/flows/flow-1/published', $url);
+            return FakeTransport::json(200, ['version' => 3, 'definition' => ['parties' => [], 'nodes' => []], 'request_field_types' => []]);
+        };
+        $client = $this->clientRw($published, function (string $method, string $url, ?string $body) use (&$captured): Response {
             $captured['url'] = $url;
             $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
             return FakeTransport::json(201, self::runObj());
@@ -163,6 +167,8 @@ final class FlowRunTest extends TestCase
         $run = $client->triggerFlowRun('flow-1', 'csc-1', ['company' => self::COMPANY_UID, 'person' => self::PERSON_UID]);
         self::assertStringEndsWith('/company-data/flows/flow-1/runs', $captured['url']);
         self::assertSame('csc-1', $captured['body']['target']['connection_id']);
+        self::assertSame(3, $captured['body']['flow_version']);
+        self::assertArrayNotHasKey('tag_values', $captured['body']);
         self::assertSame('company', $run->companyPartyKey());
         self::assertSame(self::COMPANY_UID, $run->serviceUserId());
     }

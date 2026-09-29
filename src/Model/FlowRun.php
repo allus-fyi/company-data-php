@@ -61,13 +61,28 @@ final class FlowRun
          */
         public readonly ?array $privateSlugs = null,
         /**
-         * The viewer's own copies of the run's connection sources, `[source_key => file]` — the
+        * The viewer's own copies of the run's connection sources, `[source_key => file]` — the
          * owning company's on the service Client, the customer's own on CustomerClient. Empty when
          * the run holds none.
          *
          * @var array<string,string>
-         */
+        */
         public readonly array $sourceFiles = [],
+        /**
+         * The owning company's profile values the run's owner-party text tags name, fixed at start:
+         * `"party.field"` => `['v' => value, 't' => field_type]`. Null on a run whose text names none.
+         *
+         * @var array<string,array<string,mixed>>|null
+         */
+        public readonly ?array $ownerTagValues = null,
+        /**
+         * The company's sealed values for the run's non-owner party text tags, fixed at start:
+         * `['public' => wrapper, 'public_tags' => [tag], 'private' => [tag => wrapper]]`, sealed to
+         * the service key. Null on a run whose text names none.
+         *
+         * @var array<string,mixed>|null
+        */
+        public readonly ?array $tagValues = null,
     ) {
     }
 
@@ -174,6 +189,9 @@ final class FlowRun
             raw: $obj,
             privateSlugs: $privateSlugs,
             sourceFiles: $sourceFiles,
+            ownerTagValues: is_array($obj['owner_tag_values'] ?? null) ? $obj['owner_tag_values'] : null,
+            tagValues: (is_array($obj['tag_values'] ?? null) && is_string($obj['tag_values']['public'] ?? null))
+                ? $obj['tag_values'] : null,
         );
     }
 }

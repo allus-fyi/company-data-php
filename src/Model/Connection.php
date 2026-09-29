@@ -26,6 +26,13 @@ final class Connection
         /** The customer's profile share code (previously only via {@see $raw}); null when absent. */
         public readonly ?string $shareCode = null,
         public readonly array $raw = [],
+        /**
+         * Per answered slug, whether its value is private — the source field's privacy, false for an
+         * answer with no source field. A slug absent here is private. Metadata only.
+         *
+         * @var array<string,bool>
+         */
+        public readonly array $valuesPrivate = [],
     ) {
     }
 
@@ -90,6 +97,10 @@ final class Connection
             shareCode: isset($obj['share_code']) ? (string) $obj['share_code']
                 : (isset($identity['share_code']) ? (string) $identity['share_code'] : null),
             raw: $obj,
+            valuesPrivate: array_filter(
+                is_array($obj['values_private'] ?? null) ? $obj['values_private'] : [],
+                'is_bool'
+            ),
         );
     }
 }

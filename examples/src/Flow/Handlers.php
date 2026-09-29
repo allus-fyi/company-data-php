@@ -58,7 +58,7 @@ final class Handlers implements Family
     private const CALL_REQUEST_FIELDS = 'Client::requestFields — resolves the flow name + published version (the only handle the portal ever shows for it) to its flow id';
     private const CALL_IDENTITY = 'Client::identity — GET /api/company-data/whoami: this service\'s own company_user_id, which the COMPANY party binds to';
     private const CALL_CONNECTIONS = 'Client::connections — resolves the person\'s own share code to the connection whose id the CUSTOMER party binds to';
-    private const CALL_TRIGGER = 'Client::triggerFlowRun — starts a run of the published flow for that connection, pinning the flow\'s latest published version';
+    private const CALL_TRIGGER = 'Client::triggerFlowRun — starts a run of the published flow for that connection, pinning the flow\'s latest published version — reads that version first and, when its text shows the customer\'s shared values, seals them for the company and the customer and sends them with it';
     private const CALL_FLOW_RUN = 'Client::flowRun — re-read on every poll to see whose turn the run is on';
     private const CALL_PROCESS = 'Client::processFlowRun — drives ONE company step: decrypts the answers so far, fills the node, type-checks the values, encrypts a copy per party, submits — and generates the output documents when the submit lands on a document-mode leaf';
     private const CALL_ANSWERS = 'Client::flowRunAnswers — the completed run\'s answers, decrypted with the service key';
