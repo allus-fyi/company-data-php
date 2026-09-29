@@ -523,18 +523,32 @@ $value = $doc->payloadKind === 'json' ? $doc->json() : $doc->value;   // json() 
 
 * `listDocuments` filters optionally by `personUserId` and/or `status` and pages with `limit`/`offset`.
 * `document($id)` fetches one. Call `->json()` on a `'json'` document to get the plaintext (it transparently decrypts a per-person, encrypted document; a broadcast doc is already plaintext).
-* `documentFile($id)` (#491) downloads a `'file'` document's BYTES — the metadata methods don't include them. A **broadcast** (plaintext) document's bytes are returned as-is; a **per-person / private** document is encrypted to the *recipient's* key (not your service key), so `documentFile` fails clearly with `documents.recipient_encrypted` rather than a doomed decrypt. For a generated flow contract's own copy use `flowRunDocument($runId)` below (that copy IS service-key-encrypted).
+* `documentFile($id)` downloads a `'file'` document's BYTES — the metadata methods don't include them. A **broadcast** (plaintext) document's bytes are returned as-is; a **per-person / private** document is encrypted to the *recipient's* key (not your service key), so `documentFile` fails clearly with `documents.recipient_encrypted` rather than a doomed decrypt. For a generated flow document's own copy use `flowRunDocument($runId, $outputKey)` below (that copy IS service-key-encrypted).
 
 ### Contract flows & identity (#491)
 
 ```php
 flowRunAnswers(FlowRun|string $run): array    // #491 gap 1 — a completed run's DECRYPTED answers {slug: plaintext}
-flowRunDocument(string $runId): string        // #491 gap 2 — the company's own copy of a run's generated contract (plaintext bytes)
+flowRunDocument(string $runId, string $outputKey): string   // the company's own copy of one generated output document (plaintext bytes)
 identity(): array                             // #491 gap 3 — this client's {company_user_id, service_id}
 ```
 
 * `flowRunAnswers($run)` returns a completed run's decrypted `{slug => plaintext}` answers (accepts a fetched `FlowRun` or a run id). It is the public accessor for a finished run's answers, which `processFlowRun` returns untouched.
-* `flowRunDocument($runId)` downloads the company's own service-key-encrypted copy of a run's generated contract and returns the plaintext file bytes (`404` until the run generates a document) — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument`).
+* A document leaf can produce several named **output documents** (e.g. "Contract" and "Addendum"). `generateFlowDocument($run)` returns `['documents' => [...], 'status' => ...]` — one `[output_key, party_key, document_id, position]` per produced (output document, participant); `position` is the step's 1-based place in the run's ONE signing line (one signer at a time, across every output), `null` for a party an output's signer list does not name. A repeat answers the same set.
+* A `FlowRun`'s `participants` are `FlowRunParticipant` objects (`partyKey`, `personUserId`, `connectionId`, `documents`); `documents` is that participant's own copy of each output document — `FlowRunParticipantDocument` (`outputKey`, `name`, `documentId`, `documentStatus`, `requiresSignature`, `requiresAcceptance`, `position`, `action`, `actedAt`), ordered by line position.
+* `flowRunDocument($runId, $outputKey)` downloads the company's own service-key-encrypted copy of one output document and returns the plaintext file bytes — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument` per output). A `404` is `flows.run_not_found` for an unknown run, or `flows.no_document` when that output was not produced or the company is not a bound party.
+
+```php
+$run = $client->flowRun($runId);
+foreach ($run->participants as $p) {
+    if ($p->partyKey !== $run->companyPartyKey()) {
+        continue;
+    }
+    foreach ($p->documents as $doc) {
+        $pdf = $client->flowRunDocument($run->id, $doc->outputKey);
+    }
+}
+```
 * `identity()` returns this client's `{company_user_id, service_id}` from `GET /api/company-data/whoami`, so a `triggerFlowRun` binding's **company** party can bind to `company_user_id` (the person party's user_id comes from the connection).
 
 **The party that answers a run's last step generates the contract — the customer role included.**
@@ -547,8 +561,9 @@ $customer->generateFlowDocument(string $connectionId, FlowRun $run): mixed   // 
 
 Pass the run as re-read after your leaf submit. The answer map comes from your OWN copy of the run's
 answers, decrypted with the account key — every party's answers are sealed to every bound party, so
-that copy holds the whole run and no service key is involved. Returns `[document_id, documents,
-status]`; a repeat answers the same document set. Throws `ConfigError` when the run's current step is
+that copy holds the whole run and no service key is involved. Returns `[documents, status]` — one
+`[output_key, party_key, document_id, position]` per produced (output document, participant); a repeat
+answers the same set. Throws `ConfigError` when the run's current step is
 not bound to your company.
 
 > **Example:** a runnable website that drives a contract flow end-to-end through
@@ -672,7 +687,7 @@ $client->deleteDocument($documentId);                          // also removes t
 * `updateDocumentStatus` moves a document through its lifecycle (`offering` → `ready_to_sign` → `active` → `active_but_ending` → `ended`).
 * `updateDocumentMetadata` updates `name`, `description`, and/or `metadata` — pass at least one (else `ConfigError`).
 * `deleteDocument` deletes the document and its stored file.
-* A contract-flow-generated document can also read `waiting` — a run-participant copy whose signer has not been reached yet in the run's ordered signing plan. It is read-only: `updateDocumentStatus` throws with `error_key: 'documents.run_managed'` (409) if you try to write `status` on a run-participant document while it is `waiting`, `ready_to_sign` or `offering` — that status moves only through flow generation, the run's own advance, sign/accept, or a run cancel/decline. A run-participant document's `runSignatures` property carries the run's ordered signature summary.
+* A contract-flow-generated document can also read `waiting` — a run-participant copy whose signer has not been reached yet in the run's signing line. It is read-only: `updateDocumentStatus` throws with `error_key: 'documents.run_managed'` (409) if you try to write `status` on a run-participant document while it is `waiting`, `ready_to_sign` or `offering` — that status moves only through flow generation, the run's own advance, sign/accept, or a run cancel/decline. A run-participant document's `runSignatures` property carries the WHOLE run's signing line — one entry per (output document, participant), in line order, each `{output_key, name, party_key, document_id, position, status, action, acted_at}`; every document of the run carries the same summary.
 
 ### Reacting to a status change in the pump
 

@@ -60,9 +60,9 @@ final class Handlers implements Family
     private const CALL_CONNECTIONS = 'Client::connections — resolves the person\'s own share code to the connection whose id the CUSTOMER party binds to';
     private const CALL_TRIGGER = 'Client::triggerFlowRun — starts a run of the published flow for that connection, pinning the flow\'s latest published version';
     private const CALL_FLOW_RUN = 'Client::flowRun — re-read on every poll to see whose turn the run is on';
-    private const CALL_PROCESS = 'Client::processFlowRun — drives ONE company step: decrypts the answers so far, fills the node, type-checks the values, encrypts a copy per party, submits — and generates the document when the submit lands on a document-mode leaf';
+    private const CALL_PROCESS = 'Client::processFlowRun — drives ONE company step: decrypts the answers so far, fills the node, type-checks the values, encrypts a copy per party, submits — and generates the output documents when the submit lands on a document-mode leaf';
     private const CALL_ANSWERS = 'Client::flowRunAnswers — the completed run\'s answers, decrypted with the service key';
-    private const CALL_DOCUMENT = 'Client::flowRunDocument — downloads the company\'s own copy of the generated contract and decrypts it with the service key';
+    private const CALL_DOCUMENT = 'Client::flowRunDocument — downloads the company\'s own copy of output document %s and decrypts it with the service key';
 
     public function __construct(private readonly Runtime $rt)
     {
@@ -236,7 +236,7 @@ final class Handlers implements Family
     /**
      * The idempotent, short-cycled poll that IS the drive loop and the resume (spec §2). Reads the
      * platform run; if it is the company's turn drives exactly ONE step; on completion fetches the answers
-     * and (document-mode) downloads the generated contract. A terminal (completed) run returns its cached
+     * and (document-mode) downloads every generated output document. A terminal (completed) run returns its cached
      * result on every poll until TTL/Clear.
      *
      * @param array<string,mixed> $run
@@ -381,8 +381,9 @@ final class Handlers implements Family
     }
 
     /**
-     * Terminal: fetch the decrypted answers and, for a document-mode run, download the generated
-     * contract's company copy (flowRunDocument — the run-scoped, service-key-decryptable surface).
+     * Terminal: fetch the decrypted answers and, for a document-mode run, download the company's copy
+     * of EVERY output document the run produced (flowRunDocument — the run-scoped,
+     * service-key-decryptable surface).
      *
      * @param array<string,mixed> $run
      * @return array<string,mixed>
@@ -399,19 +400,50 @@ final class Handlers implements Family
         $run['answers'] = $answersOut;
 
         if (($flowRun->outputMode ?? null) === 'document') {
-            try {
-                $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_DOCUMENT);
-                $bytes = $client->flowRunDocument($flowRunId);
-                $run['document'] = ['status' => 'downloaded', 'downloaded' => true, 'bytes' => strlen($bytes)];
-            } catch (ApiError $e) {
-                // The run completed but the document is not retrievable yet — report it, don't fail.
-                $run['document'] = ['status' => 'unavailable', 'downloaded' => false, 'error' => $e->getMessage()];
+            $documents = [];
+            foreach (self::companyOutputKeys($flowRun) as $outputKey) {
+                try {
+                    $run['calls'] = Runtime::addCall($run['calls'] ?? [], sprintf(self::CALL_DOCUMENT, $outputKey));
+                    $bytes = $client->flowRunDocument($flowRunId, $outputKey);
+                    $documents[] = [
+                        'output_key' => $outputKey, 'status' => 'downloaded', 'downloaded' => true, 'bytes' => strlen($bytes),
+                    ];
+                } catch (ApiError $e) {
+                    // The run completed but this output is not retrievable — report it, don't fail.
+                    $documents[] = [
+                        'output_key' => $outputKey, 'status' => 'unavailable', 'downloaded' => false, 'error' => $e->getMessage(),
+                    ];
+                }
             }
+            $run['documents'] = $documents;
         }
 
         $run['status'] = 'completed';
         $run['completed'] = true;
         return $run;
+    }
+
+    /**
+     * The output keys of the documents the run produced for the company, in signing-line order, each
+     * once — read off every participant row bound to the company's own user id (a company can hold
+     * more than one party of a run, and each such row carries a copy of every output).
+     *
+     * @return list<string>
+     */
+    private static function companyOutputKeys(FlowRun $flowRun): array
+    {
+        $keys = [];
+        foreach ($flowRun->participants as $participant) {
+            if ($participant->personUserId !== $flowRun->companyUserId) {
+                continue;
+            }
+            foreach ($participant->documents as $doc) {
+                if ($doc->outputKey !== null && $doc->outputKey !== '' && !in_array($doc->outputKey, $keys, true)) {
+                    $keys[] = $doc->outputKey;
+                }
+            }
+        }
+        return $keys;
     }
 
     /**
@@ -437,7 +469,7 @@ final class Handlers implements Family
     /**
      * The GET /api/runs/{runId} response: the SHARED run envelope (CONTRACT.md — outer
      * {status:"pending"|"done"|"failed", result?, error?, calls}) with the pinned FLOW shape nested under
-     * `result` ({status:"running"|"waiting_person"|"completed", steps, answers?, document?}). Progress is
+     * `result` ({status:"running"|"waiting_person"|"completed", steps, answers?, documents?}). Progress is
      * meant to be read ONLY from `run.result`, with polling continuing ONLY while the outer status is
      * "pending", so the inner flow status must NOT sit at the top level — it drives under "pending" until
      * the platform run completes ("done") or errors ("failed").
@@ -457,8 +489,8 @@ final class Handlers implements Family
         if (isset($run['answers'])) {
             $result['answers'] = $run['answers'];
         }
-        if (isset($run['document'])) {
-            $result['document'] = $run['document'];
+        if (isset($run['documents'])) {
+            $result['documents'] = $run['documents'];
         }
 
         $out = [

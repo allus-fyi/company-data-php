@@ -23,6 +23,10 @@ final class FlowRunTest extends TestCase
 {
     private const COMPANY_UID = 'company-1';
     private const PERSON_UID = 'person-1';
+    private const GENERATED = [
+        'documents' => [['output_key' => 'out_1', 'party_key' => 'company', 'document_id' => 'doc-9', 'position' => 1]],
+        'status' => 'awaiting_signature',
+    ];
 
     /** @var array<string,mixed> */
     private static array $vector;
@@ -123,7 +127,7 @@ final class FlowRunTest extends TestCase
         array $answers = [],
         ?array $def = null,
         string $outputMode = 'data_only',
-        ?string $documentId = null,
+        array $participants = [],
     ): array {
         $def ??= self::flowDef();
         $def['output_mode'] = $outputMode;
@@ -137,7 +141,7 @@ final class FlowRunTest extends TestCase
             'bindings' => ['company' => self::COMPANY_UID, 'person' => self::PERSON_UID],
             'status' => $status,
             'current_node' => $current,
-            'document_id' => $documentId,
+            'participants' => $participants,
             'output_mode' => $outputMode,
             'definition' => $def,
             'answers' => $answers,
@@ -262,11 +266,12 @@ final class FlowRunTest extends TestCase
         $client = $this->clientRw($this->noGet(), function (string $method, string $url, ?string $body) use (&$captured): Response {
             $captured['url'] = $url;
             $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
-            return FakeTransport::json(200, ['document_id' => 'doc-9', 'status' => 'awaiting_signature']);
+            return FakeTransport::json(200, self::GENERATED);
         });
         $run = FlowRun::fromApi(self::runObj('generating', 'n1', $answers, null, 'document'));
         $res = $client->generateFlowDocument($run);
-        self::assertSame('doc-9', $res['document_id']);
+        self::assertSame('doc-9', $res['documents'][0]['document_id']);
+        self::assertSame('out_1', $res['documents'][0]['output_key']);
         self::assertStringEndsWith('/company-data/flow-runs/run-1/generate', $captured['url']);
 
         $otk = base64_decode($captured['body']['otk'], true);
@@ -300,8 +305,15 @@ final class FlowRunTest extends TestCase
         $getRouter = function (string $url) use ($spki, &$posts, $single): Response {
             if (str_ends_with($url, '/company-data/flow-runs/run-1')) {
                 $status = $posts === [] ? 'awaiting_company' : 'awaiting_signature';
-                $docId = $posts === [] ? null : 'doc-9';
-                return FakeTransport::json(200, self::runObj($status, 'n1', [], $single, 'document', $docId));
+                $participants = [[
+                    'party_key' => 'company', 'person_user_id' => self::COMPANY_UID, 'connection_id' => null,
+                    'documents' => $posts === [] ? [] : [[
+                        'output_key' => 'out_1', 'name' => 'Contract', 'document_id' => 'doc-9',
+                        'document_status' => 'ready_to_sign', 'requires_signature' => true,
+                        'requires_acceptance' => false, 'position' => 1, 'action' => null, 'acted_at' => null,
+                    ]],
+                ]];
+                return FakeTransport::json(200, self::runObj($status, 'n1', [], $single, 'document', $participants));
             }
             if (str_ends_with($url, '/company-data/connections/csc-1')) {
                 return FakeTransport::json(200, ['connection_id' => 'csc-1', 'share_code' => 'ABC123']);
@@ -317,7 +329,7 @@ final class FlowRunTest extends TestCase
                 return FakeTransport::json(200, self::runObj('generating', 'n1', [], $single, 'document'));
             }
             self::assertStringEndsWith('/generate', $url);
-            return FakeTransport::json(200, ['document_id' => 'doc-9', 'status' => 'awaiting_signature']);
+            return FakeTransport::json(200, self::GENERATED);
         };
         $client = $this->clientRw($getRouter, $writeRouter);
         $run = $client->processFlowRun('run-1', fn (array $node, array $answers): array => ['company_name' => 'ACME BV']);
@@ -325,7 +337,8 @@ final class FlowRunTest extends TestCase
         self::assertTrue((bool) array_filter($posts, fn ($p) => str_ends_with($p, '/answers')));
         self::assertTrue((bool) array_filter($posts, fn ($p) => str_ends_with($p, '/generate')));
         self::assertSame('awaiting_signature', $run->status);
-        self::assertSame('doc-9', $run->documentId);
+        self::assertSame('doc-9', $run->participants[0]->documents[0]->documentId);
+        self::assertSame('out_1', $run->participants[0]->documents[0]->outputKey);
     }
 
     public function testProcessFlowRunNotOurTurn(): void

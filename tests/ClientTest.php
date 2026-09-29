@@ -331,14 +331,14 @@ final class ClientTest extends TestCase
             format: 'xml',
         );
         $t = new FakeTransport(function (string $url, ?array $q) use ($xml): Response {
-            if (str_ends_with($url, '/document/file')) {
+            if (str_ends_with($url, '/flow-runs/run-1/documents/out_1/file')) {
                 return FakeTransport::text(200, $xml, ['Content-Type' => 'application/xml']);
             }
             throw new \AssertionError("unexpected GET {$url}");
         });
         $client = new Client($cfg, http: new HttpClient($cfg, transport: $t), sleep: fn (float $_s): null => null);
 
-        $data = $client->flowRunDocument('run-1');
+        $data = $client->flowRunDocument('run-1', 'out_1');
         self::assertSame(self::$vector['binary']['inner_full_sha256'], hash('sha256', $data));
     }
 

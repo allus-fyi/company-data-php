@@ -1030,7 +1030,7 @@ final class Client
      *  - a PER-PERSON / private document is encrypted to the RECIPIENT's key and served as
      *    {@code {"encrypted":true,"value":{"_enc":1,…}}} — the company CANNOT decrypt that with its service
      *    key, so this fails clearly (ApiError {@code documents.recipient_encrypted}) rather than attempting a
-     *    doomed service-key decrypt. For a generated flow contract's OWN copy the company uses
+     *    doomed service-key decrypt. For a generated flow document's OWN copy the company uses
      *    {@see flowRunDocument} — that copy IS service-key-encrypted.
      */
     public function documentFile(string $documentId): string
@@ -1042,7 +1042,7 @@ final class Client
                 0,
                 'documents.recipient_encrypted',
                 'This document is encrypted to its recipient and is not readable with the company service key. '
-                . 'For a generated flow contract, use flowRunDocument($runId) to download the company copy.',
+                . 'For a generated flow document, use flowRunDocument($runId, $outputKey) to download the company copy.',
             );
         }
         return $raw; // broadcast / plaintext bytes
@@ -1323,16 +1323,21 @@ final class Client
     }
 
     /**
-     * Download the company's OWN copy of a run's generated flow contract — the PLAINTEXT
-     * file bytes. GETs {@code /flow-runs/{runId}/document/file}, which serves the company-party copy
-     * encrypted to the SERVICE key (unlike {@see documentFile}'s recipient-targeted copy), so the same
-     * {@see BinaryHandle} the slot-file download uses decrypts it → the {@code {"file":"data:…;base64,…"}}
-     * envelope → the file bytes. 404 (ApiError) when the run has not generated a document yet.
+     * Download the company's OWN copy of one output document a run generated — the PLAINTEXT file
+     * bytes. {@code $outputKey} names the output document (the {@code outputKey} of an entry in the
+     * company participant's {@code documents}, or the {@code output_key} of a generate response's
+     * {@code documents} entry). GETs {@code /flow-runs/{runId}/documents/{outputKey}/file}, which
+     * serves the company-party copy encrypted to the SERVICE key (unlike {@see documentFile}'s
+     * recipient-targeted copy), so the same {@see BinaryHandle} the slot-file download uses decrypts
+     * it → the {@code {"file":"data:…;base64,…"}} envelope → the file bytes. 404 (ApiError)
+     * {@code flows.run_not_found} for an unknown run, {@code flows.no_document} when that output was
+     * not produced or the company is not a bound party.
      */
-    public function flowRunDocument(string $runId): string
+    public function flowRunDocument(string $runId, string $outputKey): string
     {
         return (new BinaryHandle(
-            valueUrl: self::BASE . '/flow-runs/' . rawurlencode($runId) . '/document/file',
+            valueUrl: self::BASE . '/flow-runs/' . rawurlencode($runId) . '/documents/'
+                . rawurlencode($outputKey) . '/file',
             fetch: fn (string $u): BinaryFetchResult => $this->binaryFetch($u),
             decrypt: fn (array|string $w): string => $this->decryptValue($w),
         ))->bytes();
@@ -1615,8 +1620,10 @@ final class Client
     /**
      * Document-mode company leaf: one-time-key value gather → POST /generate. Seals the company's
      * decrypted answers with {@see Crypto::oneTimeKeyBundle()} and POSTs {@code [otk, values]}.
-     * Returns the raw API response {@code [document_id, documents, status]} (idempotent — a repeat
-     * answers the same document set).
+     * Returns the raw API response {@code [documents, status]} — {@code documents} is one
+     * {@code [output_key, party_key, document_id, position]} per produced (output document,
+     * participant), {@code position} the step's 1-based place in the run's signing line or null for an
+     * unlisted party (idempotent — a repeat answers the same set).
      *
      * @return array<string,mixed>|string
      */
@@ -1630,8 +1637,9 @@ final class Client
      * High-level company turn: load → (if our turn) fill + advance + generate. {@code $fillNode} is
      * {@code fn(array $node, array $answers): array} returning {@code [slug => value]}; the SDK
      * encrypts per party, submits, and — if the submit landed on a document-mode leaf — calls
-     * {@see generateFlowDocument()}. Returns the latest {@see FlowRun}; when the run is not awaiting
-     * the company it is returned untouched.
+     * {@see generateFlowDocument()}. Returns the latest {@see FlowRun} — after a generate, each
+     * participant's produced documents are on its {@code documents}; when the run is not awaiting the
+     * company it is returned untouched.
      *
      * @param callable(array<string,mixed>, array<string,mixed>): (array<string,mixed>|null) $fillNode
      * @param array<string,RSAPublicKey>                                                      $partyPubKeys

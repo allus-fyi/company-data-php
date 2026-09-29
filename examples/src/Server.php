@@ -19,11 +19,11 @@ use Allus\Examples\Identity\Handlers as IdentityHandlers;
  *
  * The handlers ARE the SDK example — each opens with the intended top-level SDK calls. This class contains
  * NO SDK calls; it only serves the bundle and shuttles requests to/from the handlers. All 14 scenarios of
- * all three families run on ONE port (default 8091) at contractVersion 3.
+ * all three families run on ONE port (default 8091) at contractVersion 4.
  */
 final class Server
 {
-    public const CONTRACT_VERSION = 3;
+    public const CONTRACT_VERSION = 4;
     public const SDK = 'php';
 
     private readonly IdentityHandlers $identity;
@@ -189,7 +189,7 @@ final class Server
 
     // ── GET /api/meta ────────────────────────────────────────────────────────
 
-    /** Aggregate ALL scenarios of all three families (spec §3), at contractVersion 3. */
+    /** Aggregate ALL scenarios of all three families (spec §3), at contractVersion 4. */
     private function meta(): Response
     {
         $scenarios = [];

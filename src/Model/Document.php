@@ -54,9 +54,10 @@ final class Document
         public readonly array $signatures = [],
         /**
          * @var array<int,array<string,mixed>>|null present only on a contract-flow run-participant
-         *      document: the run's ordered signature summary — one entry per participant owing an
-         *      act, each `{party_key, document_id, position, status, action, acted_at}`. Null on
-         *      any other document.
+         *      document: the WHOLE run's signing line — one entry per (output document,
+         *      participant) in line order, each `{output_key, name, party_key, document_id,
+         *      position, status, action, acted_at}`. Every document of the run carries the same
+         *      summary. Null on any other document.
          */
         public readonly ?array $runSignatures = null,
         private $decryptValue = null,

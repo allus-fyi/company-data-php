@@ -9,12 +9,12 @@ its three scenario families, all served by **one command on one port**:
   feed, a webhook receiver, and creating document/contract types (six offered,
   pick which to create).
 - **Flow** — trigger and drive a contract flow end-to-end, then read the decrypted
-  answers and download the generated signed document.
+  answers and download every generated output document.
 
 ~90 % of the logic is a shared frontend fetched from a pinned release; this
 directory is the thin PHP backend that implements the
 [demo-backend contract](https://github.com/allme-sdk/example-test-suite)
-(`CONTRACT.md`, **contract v3**) for **all 13 scenarios**. Everything the handlers
+(`CONTRACT.md`, **contract v4**) for **all 13 scenarios**. Everything the handlers
 do goes through the SDK's **intended top-level functions** — never internals, never
 raw platform HTTP; the OIDC scenarios use the standard third-party
 `facile-it/php-openid-client` library, which is the point of the OIDC demonstration.
@@ -49,7 +49,7 @@ serves the example test suite — **all three scenario families** — on
 3. on first run, downloads the **pinned** frontend release named in
    `frontend.lock`, **verifies its sha256**, and unpacks it to `.frontend/<tag>/`
    (a present, verified bundle is a cache hit — nothing is re-fetched),
-4. checks the bundle's `contract.json` version against the backend's (v3),
+4. checks the bundle's `contract.json` version against the backend's (v4),
 5. refuses a busy port with a clear message, then
 6. serves port `8091` on **all interfaces** (`php -S 0.0.0.0:8091`) and prints every
    URL it is reachable on — a **single-worker** `php -S` (do not set
@@ -143,6 +143,13 @@ the ids the SDK needs. The person's turn — and
 the contract fixture's signature — are completed on a phone with the allme app,
 signed in as the connected demo person.
 
+A document leaf can produce several named **output documents** (e.g. "Contract" and
+"Addendum"). Generation answers `[documents => [[output_key, party_key, document_id,
+position]], status]` — one entry per produced (output document, participant). On completion
+the handler reads the company participant's `documents` off `flowRun($runId)` and downloads
+the company's own copy of EACH output with `flowRunDocument($runId, $outputKey)`; the run
+result reports them as `documents: [{output_key, status, downloaded}]`.
+
 ---
 
 ## The webhook scenario — set up first; tunnel optional
@@ -215,7 +222,7 @@ the link-click path for that scenario locally.
 |---|---|
 | **`port 8091 is busy`** at startup | Another example (or process) holds the port — one browser origin is shared across SDK examples, so only one runs at a time. Stop it, or run `PORT=<n> composer start`. |
 | **Stale / wrong frontend** after a pin bump | The present bundle is a cache hit and is not re-fetched. `rm -rf .frontend/` and `composer start` to re-download the pinned release. |
-| **`contract mismatch: bundle contractVersion=… backend implements …`** | The pinned bundle's `contract.json` version differs from this backend (v3). Bump `frontend.lock` to a matching release (and re-fetch), or update the backend. |
+| **`contract mismatch: bundle contractVersion=… backend implements …`** | The pinned bundle's `contract.json` version differs from this backend (v4). Bump `frontend.lock` to a matching release (and re-fetch), or update the backend. |
 | **`frontend checksum MISMATCH`** | The downloaded `dist.tar.gz` doesn't match `frontend.lock`'s `sha256`. Fix the `sha256` (from `shasum -a 256 dist.tar.gz` on the real release) or re-download; the example refuses to serve an unverified bundle. |
 | **`could not download the pinned frontend release`** | The release/tag doesn't exist yet, or no network. If unpublished, seed the bundle into `.frontend/<tag>/` manually (the error prints the exact commands). |
 | **`dependencies not installed`** on a request | `vendor/` is missing — run `composer install` (or just `composer start`, which does it). |

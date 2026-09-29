@@ -17,7 +17,7 @@ declare(strict_types=1);
  *      is reachable on.
  */
 
-const CONTRACT_VERSION = 3; // must equal Server::CONTRACT_VERSION
+const CONTRACT_VERSION = 4; // must equal Server::CONTRACT_VERSION
 const RELEASE_BASE = 'https://github.com/allme-sdk/example-test-suite/releases/download';
 
 $base = dirname(__DIR__);
