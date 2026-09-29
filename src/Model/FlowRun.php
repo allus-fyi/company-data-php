@@ -60,6 +60,14 @@ final class FlowRun
          * @var list<string>|null
          */
         public readonly ?array $privateSlugs = null,
+        /**
+         * The viewer's own copies of the run's connection sources, `[source_key => file]` — the
+         * owning company's on the service Client, the customer's own on CustomerClient. Empty when
+         * the run holds none.
+         *
+         * @var array<string,string>
+         */
+        public readonly array $sourceFiles = [],
     ) {
     }
 
@@ -137,6 +145,15 @@ final class FlowRun
             }
         }
 
+        $sourceFiles = [];
+        if (is_array($obj['source_files'] ?? null)) {
+            foreach ($obj['source_files'] as $key => $file) {
+                if (is_string($file)) {
+                    $sourceFiles[(string) $key] = $file;
+                }
+            }
+        }
+
         return new self(
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             flowId: isset($obj['flow_id']) ? (string) $obj['flow_id'] : null,
@@ -156,6 +173,7 @@ final class FlowRun
             participants: $participants,
             raw: $obj,
             privateSlugs: $privateSlugs,
+            sourceFiles: $sourceFiles,
         );
     }
 }

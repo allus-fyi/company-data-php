@@ -1272,13 +1272,88 @@ final class Client
      * latest PUBLISHED version. {@code $connectionId} is the person-side
      * {@code company_service_connections.id} for this service.
      *
-     * @param array<string,string> $bindings
+     * {@code $sourceFiles} = {@code [[source_key, for_user_id, file], …]}: one staged copy
+     * ({@see stageRunFile}) per answered connection source ({@code conn:<party>:<request_slug>}) a rule
+     * of the pinned version names, per distinct bound user — the company's own copy sealed to the
+     * service key. A start whose list is not exactly that set is refused with {@see ApiError}
+     * {@code flows.source_files_invalid}, whose {@code $details} carry {@code missing}
+     * ({@code [[source_key, for_user_id]]}) and {@code unexpected} ({@code [file]}); nothing is written.
+     *
+     * @param array<string,string>                                                   $bindings
+     * @param list<array{source_key: string, for_user_id: string, file: string}> $sourceFiles
      */
-    public function triggerFlowRun(string $flowId, string $connectionId, array $bindings): FlowRun
+    public function triggerFlowRun(string $flowId, string $connectionId, array $bindings, array $sourceFiles = []): FlowRun
     {
         $body = ['target' => ['connection_id' => $connectionId], 'bindings' => $bindings];
+        if ($sourceFiles !== []) {
+            $body['source_files'] = array_map(
+                static fn (array $s): array => [
+                    'source_key' => (string) $s['source_key'],
+                    'for_user_id' => (string) $s['for_user_id'],
+                    'file' => (string) $s['file'],
+                ],
+                array_values($sourceFiles),
+            );
+        }
         $created = $this->http->post(self::FLOWS . '/' . rawurlencode($flowId) . '/runs', $body);
         return FlowRun::fromApi(is_array($created) ? $created : []);
+    }
+
+    /**
+     * Stage one sealed copy of a connection source for a run start → its {@code file}.
+     * {@code POST /api/company-data/flows/{flowId}/run-files} with {@code [value]}:
+     * {@code $sealedValue} is the source's envelope JSON sealed to ONE bound user (a
+     * {@code {"_enc":1,…}} wrapper, as an array or its JSON string). Name the returned file in
+     * {@see triggerFlowRun}'s {@code $sourceFiles}. An over-budget value is refused
+     * {@code documents.too_large}.
+     *
+     * @param array<string,mixed>|string $sealedValue
+     */
+    public function stageRunFile(string $flowId, array|string $sealedValue): string
+    {
+        $body = $this->http->post(
+            self::FLOWS . '/' . rawurlencode($flowId) . '/run-files',
+            ['value' => self::sealedString($sealedValue)],
+        );
+        return self::responseFile($body);
+    }
+
+    /**
+     * Upload one bound party's copy of a binary answer on the company's turn → its {@code file}.
+     * {@code POST /api/company-data/flow-runs/{runId}/answer-files} with
+     * {@code [slug, for_user_id, value]}: {@code $slug} a binary field of the current step,
+     * {@code $forUserId} a bound party, {@code $sealedValue} the file's envelope JSON sealed to that
+     * party's key (a wrapper array or its JSON string). Upload one copy per bound party, then submit
+     * {@code {"_enc_file": file}} as each party's answer value.
+     *
+     * @param array<string,mixed>|string $sealedValue
+     */
+    public function uploadAnswerFile(string $runId, string $slug, string $forUserId, array|string $sealedValue): string
+    {
+        $body = $this->http->post(
+            self::FLOW_RUNS . '/' . rawurlencode($runId) . '/answer-files',
+            ['slug' => $slug, 'for_user_id' => $forUserId, 'value' => self::sealedString($sealedValue)],
+        );
+        return self::responseFile($body);
+    }
+
+    /**
+     * The company's own copy of a run's connection source, as stored — the sealed wrapper.
+     * {@code GET /api/company-data/flow-runs/{runId}/source-files/{sourceKey}} (the key, e.g.
+     * {@code conn:customer:passport}, is URL-encoded). The wrapper opens with the service key; its
+     * plaintext is the file's envelope JSON. {@see FlowRun::$sourceFiles} lists the run's keys.
+     *
+     * @return array<string,mixed>|string
+     */
+    public function flowRunSourceFile(string $runId, string $sourceKey): array|string
+    {
+        $result = $this->binaryFetch(
+            self::FLOW_RUNS . '/' . rawurlencode($runId) . '/source-files/' . rawurlencode($sourceKey),
+        );
+        if ($result->wrapper === null) {
+            throw new DecryptError('no sealed copy of ' . $sourceKey . ' was served');
+        }
+        return $result->wrapper;
     }
 
     /**
@@ -1397,6 +1472,12 @@ final class Client
             $slug = $row['slug'] ?? null;
             $value = $row['value'] ?? null;
             if (!is_string($slug) || $value === null) {
+                continue;
+            }
+            // A file answer is a plaintext {"_enc_file": …} reference, not a wrapper; it stands in
+            // the map as that reference, which reads as answered.
+            if (FlowSources::fileRef($value) !== null) {
+                $out[$slug] = is_string($value) ? $value : json_encode($value, JSON_THROW_ON_ERROR);
                 continue;
             }
             /** @var array<string,mixed>|string $value */
@@ -1619,18 +1700,50 @@ final class Client
 
     /**
      * Document-mode company leaf: one-time-key value gather → POST /generate. Seals the company's
-     * decrypted answers with {@see Crypto::oneTimeKeyBundle()} and POSTs {@code [otk, values]}.
-     * Returns the raw API response {@code [documents, status]} — {@code documents} is one
+     * decrypted answers with {@see Crypto::oneTimeKeyBundle()} and POSTs {@code [otk, values, inputs]}.
+     * Before that, every participant PDF source the current leaf's rules name that the run HOLDS for
+     * the company — a {@code source_field} whose own answer is a file, a {@code source_connection} in
+     * {@see FlowRun::$sourceFiles} — is fetched ({@code slots/{slug}/file} resp.
+     * {@code source-files/{key}}), decrypted with the service key, sealed under the same one-time key
+     * and uploaded to {@code /generate/inputs}; {@code inputs} names them. Returns the raw API response
+     * {@code [documents, status]} — {@code documents} is one
      * {@code [output_key, party_key, document_id, position]} per produced (output document,
      * participant), {@code position} the step's 1-based place in the run's signing line or null for an
-     * unlisted party (idempotent — a repeat answers the same set).
+     * unlisted party (idempotent — a repeat answers the same set). {@code flows.source_pdf_invalid}
+     * refuses a source that is not a usable PDF (the run stays {@code generating}).
      *
      * @return array<string,mixed>|string
      */
     public function generateFlowDocument(FlowRun $run): array|string
     {
-        $body = Crypto::oneTimeKeyBundle($this->decryptRunAnswers($run));
-        return $this->http->post(self::FLOW_RUNS . '/' . rawurlencode((string) $run->id) . '/generate', $body);
+        $runId = (string) $run->id;
+        return FlowSources::generateWithInputs(
+            fn (string $path, array $body): array|string => $this->http->post($path, $body),
+            self::FLOW_RUNS . '/' . rawurlencode($runId) . '/generate',
+            $this->decryptRunAnswers($run),
+            FlowSources::held($run->definition, $run->currentNode, $run->answers, $run->serviceUserId(), $run->sourceFiles),
+            fn (array $src): string => $this->ownSourceEnvelope($runId, $src),
+        );
+    }
+
+    /**
+     * The company's own copy of one held source, decrypted to its envelope JSON.
+     *
+     * @param array{source_key: string, kind: string, slug: ?string, file: string} $src
+     */
+    private function ownSourceEnvelope(string $runId, array $src): string
+    {
+        if ($src['kind'] === 'field') {
+            $wrapper = $this->binaryFetch(
+                self::FLOW_RUNS . '/' . rawurlencode($runId) . '/slots/' . rawurlencode((string) $src['slug']) . '/file',
+            )->wrapper;
+        } else {
+            $wrapper = $this->flowRunSourceFile($runId, $src['source_key']);
+        }
+        if ($wrapper === null) {
+            throw new DecryptError('no sealed copy of ' . $src['source_key'] . ' was served');
+        }
+        return $this->decryptValue($wrapper);
     }
 
     /**
@@ -1715,6 +1828,30 @@ final class Client
             return min($retryAfter, self::CONN_MAX_BACKOFF_S);
         }
         return min(self::CONN_DEFAULT_BACKOFF_S * (2 ** ($attempt - 1)), self::CONN_MAX_BACKOFF_S);
+    }
+
+    /**
+     * A sealed wrapper as the JSON string an upload body carries.
+     *
+     * @param array<string,mixed>|string $sealedValue
+     */
+    private static function sealedString(array|string $sealedValue): string
+    {
+        return is_string($sealedValue) ? $sealedValue : json_encode($sealedValue, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * The {@code file} of an upload's {@code 201 [file]} response.
+     *
+     * @param array<string,mixed>|string $body
+     */
+    private static function responseFile(array|string $body): string
+    {
+        $file = is_array($body) ? ($body['file'] ?? null) : null;
+        if (!is_string($file) || $file === '') {
+            throw new ApiError(0, null, 'the upload response carried no file');
+        }
+        return $file;
     }
 
     /**

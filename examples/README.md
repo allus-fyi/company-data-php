@@ -150,6 +150,10 @@ the handler reads the company participant's `documents` off `flowRun($runId)` an
 the company's own copy of EACH output with `flowRunDocument($runId, $outputKey)`; the run
 result reports them as `documents: [{output_key, status, downloaded}]`.
 
+When a leaf's rule takes its PDF from a participant (a `pdf_document` flow field, or a PDF the
+customer shared on its connection), `processFlowRun` uploads the company's own copy of each held
+source as a generation input before it generates — the handler calls nothing extra.
+
 ---
 
 ## The webhook scenario — set up first; tunnel optional

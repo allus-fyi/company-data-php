@@ -388,7 +388,11 @@ final class CustomerClient
                 $slug = $row['slug'] ?? null;
                 $value = $row['value'] ?? null;
                 if (is_string($slug) && (is_string($value) || is_array($value))) {
-                    $stored[$slug] = $this->decryptAccount($value);
+                    // A file answer is a plaintext {"_enc_file": …} reference, not a wrapper; it
+                    // stands in the map as that reference, which reads as answered.
+                    $stored[$slug] = FlowSources::fileRef($value) !== null
+                        ? (is_string($value) ? $value : json_encode($value, JSON_THROW_ON_ERROR))
+                        : $this->decryptAccount($value);
                 }
             }
         }
@@ -415,7 +419,11 @@ final class CustomerClient
      * re-read then. The whole answer map comes from this company's OWN copy of the answers, opened
      * with the account key — every party's answers are sealed to every bound party, so that copy
      * holds the whole run and no service key is involved — and is sealed with
-     * {@see Crypto::oneTimeKeyBundle()}. Returns the raw API response `[documents, status]` —
+     * {@see Crypto::oneTimeKeyBundle()}. Every participant PDF source the leaf's rules name that the
+     * run holds for this company (a `source_field` whose own answer is a file, a `source_connection`
+     * in {@see FlowRun::$sourceFiles}) is first fetched through `answer-files`, decrypted with the
+     * account key, sealed under the same one-time key and uploaded to `/generate/inputs`.
+     * Returns the raw API response `[documents, status]` —
      * `documents` is one `[output_key, party_key, document_id, position]` per produced (output
      * document, participant) (idempotent — a repeat answers the same set).
      *
@@ -445,9 +453,20 @@ final class CustomerClient
             throw new ConfigError('run ' . $run->id . ' is not at a step this company answered');
         }
 
-        return $this->http->post(
-            self::CONN . '/' . $connectionId . '/flow-runs/' . $run->id . '/generate',
-            Crypto::oneTimeKeyBundle($this->flowPartyView($run)['stored']),
+        $base = self::CONN . '/' . $connectionId . '/flow-runs/' . $run->id;
+
+        return FlowSources::generateWithInputs(
+            fn (string $path, array $body): array|string => $this->http->post($path, $body),
+            $base . '/generate',
+            $this->flowPartyView($run)['stored'],
+            FlowSources::held($run->definition, $run->currentNode, $run->answers, $ownUid, $run->sourceFiles),
+            // This company's own copy of a held source — its own answer file, or its own copy of a
+            // connection source made at run start — both served by the answer-files route.
+            function (array $src) use ($base): string {
+                $resp = $this->http->getResponse($base . '/answer-files/' . rawurlencode($src['file']));
+                $body = $this->http->parseBody($resp, stripos($resp->header('Content-Type') ?? '', 'xml') !== false);
+                return $this->decryptAccount($body);
+            },
         );
     }
 

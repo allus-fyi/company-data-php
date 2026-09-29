@@ -551,6 +551,43 @@ foreach ($run->participants as $p) {
 ```
 * `identity()` returns this client's `{company_user_id, service_id}` from `GET /api/company-data/whoami`, so a `triggerFlowRun` binding's **company** party can bind to `company_user_id` (the person party's user_id comes from the connection).
 
+**Participant PDF sources.** A leaf output rule's PDF is a company template (`asset_key`), a flow
+field's answer (`source_field` → source key `field:<slug>`, a `pdf_document` field), or what the
+customer bound to a party shared on its connection for one of the service's `pdf_document` request
+fields (`source_connection: {party, request_slug}` → `conn:<party>:<request_slug>`). A rule whose
+source the run does not hold does not match, and the next rule is tried.
+
+```php
+triggerFlowRun(string $flowId, string $connectionId, array $bindings, array $sourceFiles = []): FlowRun
+stageRunFile(string $flowId, array|string $sealedValue): string                 // POST /flows/{flowId}/run-files → file
+uploadAnswerFile(string $runId, string $slug, string $forUserId, array|string $sealedValue): string   // POST /flow-runs/{runId}/answer-files → file
+flowRunSourceFile(string $runId, string $sourceKey): array|string               // GET /flow-runs/{runId}/source-files/{sourceKey} → the sealed wrapper
+```
+
+* **Connection sources are copied at run start.** For each answered `conn:` source a rule of the
+  flow's latest published version names, seal the source's envelope JSON once per distinct bound
+  user (your own copy to the service key, a person's to their public key), stage each with
+  `stageRunFile($flowId, $sealed)`, and pass `[['source_key' => …, 'for_user_id' => …, 'file' => …], …]`
+  as `triggerFlowRun`'s `$sourceFiles`. A start whose list is not exactly that set is refused with
+  `ApiError` `flows.source_files_invalid`; its `$details['missing']` lists `[source_key, for_user_id]`
+  pairs and `$details['unexpected']` the files that were not wanted — nothing is written. The copy is a
+  snapshot: a later change on the connection does not reach the run.
+* `FlowRun->sourceFiles` is `[source_key => file]` — your own copies of the run's connection sources
+  (empty when none). `flowRunSourceFile($runId, $sourceKey)` returns one as stored (the key is
+  URL-encoded; it opens with the service key).
+* **A binary field on your own turn** is answered by uploading one sealed copy per bound party with
+  `uploadAnswerFile($runId, $slug, $forUserId, $sealed)` and submitting `{"_enc_file": file}` as each
+  party's answer value. A file answer in `FlowRun->answers` is that plaintext reference (never a
+  wrapper); the SDK reads it as an answered value.
+* **Generation uploads the held source PDFs.** `generateFlowDocument($run)` — and so `processFlowRun`
+  at a document leaf — first computes the leaf's HELD sources (a `source_field` whose answer copy of
+  yours is a file, a `source_connection` in `sourceFiles`), fetches your own copy of each
+  (`slots/{slug}/file` resp. `source-files/{key}`), decrypts it with the service key, seals it under
+  the same one-time key as `values` and uploads it to `…/generate/inputs`, then generates with
+  `inputs: [[source_key, input], …]` (empty when nothing is held). `flows.generate_inputs_mismatch`
+  refuses inputs that are not exactly the held set; `flows.source_pdf_invalid` refuses a source that is
+  not a usable PDF, and the run stays `generating`.
+
 **The party that answers a run's last step generates the contract — the customer role included.**
 When your company is a CUSTOMER of another company's service and its answer completes a document-mode
 leaf, the run parks at `generating` until you generate:
@@ -564,7 +601,10 @@ answers, decrypted with the account key — every party's answers are sealed to 
 that copy holds the whole run and no service key is involved. Returns `[documents, status]` — one
 `[output_key, party_key, document_id, position]` per produced (output document, participant); a repeat
 answers the same set. Throws `ConfigError` when the run's current step is
-not bound to your company.
+not bound to your company. Every participant PDF source the leaf holds for your company is
+uploaded first, exactly as above: your own copy (your answer file, or your copy of a connection
+source) through `…/answer-files/{file}`, decrypted with the account key, sealed under the call's
+one-time key and posted to `…/generate/inputs`.
 
 > **Example:** a runnable website that drives a contract flow end-to-end through
 > these calls — trigger, type-checked step filling, a person turn on the phone, then
