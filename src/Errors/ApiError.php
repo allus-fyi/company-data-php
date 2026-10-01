@@ -17,6 +17,12 @@ namespace Allus\CompanyData\Errors;
  * GET, the change-feed drains and {@see \Allus\CompanyData\OAuthClient::pollResult()}
  * can throw it; the token request cannot. The SDK does not retry it.
  *
+ * A 503 {@code platform.out_of_order} means the region serving the call is being
+ * rebuilt. The request was not processed, so the call is safe to repeat; the
+ * response's {@code Retry-After} is 300 seconds. Any call can throw it, reads and
+ * the change-feed drains included, except the {@code client_credentials} token
+ * request. The SDK does not retry it.
+ *
  * Not {@code final}: {@see RateLimitError} extends it (a 429 IS an ApiError).
  */
 class ApiError extends \RuntimeException
