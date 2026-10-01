@@ -560,7 +560,7 @@ source the run does not hold does not match, and the next rule is tried.
 
 ```php
 triggerFlowRun(string $flowId, string $connectionId, array $bindings, array $sourceFiles = []): FlowRun
-stageRunFile(string $flowId, array|string $sealedValue): string                 // POST /flows/{flowId}/run-files → file
+stageRunFile(string $flowId, string $sourceUserId, array|string $sealedValue): string   // POST /flows/{flowId}/run-files → file
 uploadAnswerFile(string $runId, string $slug, string $forUserId, array|string $sealedValue): string   // POST /flow-runs/{runId}/answer-files → file
 flowRunSourceFile(string $runId, string $sourceKey): array|string               // GET /flow-runs/{runId}/source-files/{sourceKey} → the sealed wrapper
 ```
@@ -568,10 +568,14 @@ flowRunSourceFile(string $runId, string $sourceKey): array|string               
 * **Connection sources are copied at run start.** For each answered `conn:` source a rule of the
   flow's latest published version names, seal the source's envelope JSON once per distinct bound
   user (your own copy to the service key, a person's to their public key), stage each with
-  `stageRunFile($flowId, $sealed)`, and pass `[['source_key' => …, 'for_user_id' => …, 'file' => …], …]`
-  as `triggerFlowRun`'s `$sourceFiles`. A start whose list is not exactly that set is refused with
-  `ApiError` `flows.source_files_invalid`; its `$details['missing']` lists `[source_key, for_user_id]`
-  pairs and `$details['unexpected']` the files that were not wanted — nothing is written. The copy is a
+  `stageRunFile($flowId, $sourceUserId, $sealed)` — `$sourceUserId` the customer bound to the source's
+  party, whose shared PDF the copy is; the copy is stored in that customer's home region — and pass
+  `[['source_key' => …, 'for_user_id' => …, 'file' => …], …]` as `triggerFlowRun`'s `$sourceFiles`. A
+  start whose list is not exactly that set, or whose copy was staged for another customer than the one
+  bound to its source's party, is refused with `ApiError` `flows.source_files_invalid`; its
+  `$details['missing']` lists `[source_key, for_user_id, source_user_id]` entries and
+  `$details['unexpected']` the files that were not wanted — nothing is written. Staging a copy for a
+  customer that is not connected to the service is refused `flows.source_user_invalid`. The copy is a
   snapshot: a later change on the connection does not reach the run.
 * `FlowRun->sourceFiles` is `[source_key => file]` — your own copies of the run's connection sources
   (empty when none). `flowRunSourceFile($runId, $sourceKey)` returns one as stored (the key is
