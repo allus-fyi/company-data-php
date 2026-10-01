@@ -11,6 +11,12 @@ namespace Allus\CompanyData\Errors;
  * provided one), and a human-readable message. A transport failure (no HTTP
  * response) surfaces as {@code ApiError(0, null, ...)}.
  *
+ * A 503 {@code db.writes_paused} means saving is paused (the platform cannot
+ * complete a save in every region). Nothing was written, so the call is safe to
+ * repeat; the response's {@code Retry-After} is 30 seconds. Any call that is not a
+ * GET, the change-feed drains and {@see \Allus\CompanyData\OAuthClient::pollResult()}
+ * can throw it; the token request cannot. The SDK does not retry it.
+ *
  * Not {@code final}: {@see RateLimitError} extends it (a 429 IS an ApiError).
  */
 class ApiError extends \RuntimeException
