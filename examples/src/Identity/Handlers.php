@@ -472,6 +472,7 @@ final class Handlers implements Family
             // The raw app-key ciphertext each decrypted value above came from — pairs with `values`
             // by claim name so the panel can show a decrypt actually ran on real bytes.
             'values_cipher' => $out['values_cipher'] ?? [],
+            'attestations' => $out['attestations'] ?? [],
         ];
 
         if ($id === 4) {
