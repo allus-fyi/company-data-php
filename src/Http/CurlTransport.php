@@ -16,7 +16,7 @@ use Allus\CompanyData\Errors\ApiError;
 final class CurlTransport implements Transport
 {
     public function __construct(
-        private readonly float $timeout = 30.0,
+        private readonly float $timeout = 45.0,
     ) {
     }
 

@@ -456,7 +456,7 @@ final class FlowPlugins
      */
     public static function callPlugin(PluginPass $pass, callable $renewPass, array $call, array $request, ?Transport $transport = null): array
     {
-        $transport ??= new CurlTransport();
+        $transport ??= new CurlTransport(30.0);
         [$replyPrivate, $replySpki] = Crypto::generateReplyKeyPair();
         $body = $request;
         foreach (['picks', 'values'] as $member) {

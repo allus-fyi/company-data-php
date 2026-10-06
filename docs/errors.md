@@ -55,6 +55,14 @@ try {
 
 A **421 `region.rebase_required`** never reaches you when the platform is reachable: it is the global front door telling the SDK to send the call to the caller's home region, which the SDK does automatically (README, **How it's wired** → Regions). It surfaces as `ApiError` only when the base the refusal names is absent or empty — in which case no base was stored and no retry was made.
 
+## One request waits 45 seconds
+
+The SDK's own transport — for `Client`, `CustomerClient` and `OAuthClient` alike —
+waits 45 seconds for the platform's answer to one request, and the call then fails
+as it does when the connection drops; a `Transport` you pass in keeps its own
+limit (`CurlTransport` takes its limit in seconds as its constructor argument). A
+request given up may still have completed on the platform.
+
 ## 503 `db.writes_paused` — saving is paused, retry
 
 While the platform cannot complete a save in every region, a call can answer
