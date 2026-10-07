@@ -1726,7 +1726,7 @@ final class Client
                 $key = ($uid === $run->serviceUserId())
                     ? $svcPub
                     : $this->flowPersonPublicKey($run, $uid, $partyPubKeys);
-                $values[] = ['for_user_id' => $uid, 'value' => Crypto::encryptForPublicKey($plain, $key)];
+                $values[] = ['for_user_id' => $uid, 'value' => self::sealedString(Crypto::encryptForPublicKey($plain, $key))];
             }
             $answer = ['slug' => $slug, 'values' => $values];
             // A value whose field's default reads another party's private source is private too,
@@ -1993,11 +1993,13 @@ final class Client
     }
 
     /**
-     * A sealed wrapper as the JSON string an upload body carries.
+     * A sealed wrapper as the JSON string a flow-answer or upload body carries.
+     *
+     * @internal Shared with {@see CustomerClient}; not part of the public surface.
      *
      * @param array<string,mixed>|string $sealedValue
      */
-    private static function sealedString(array|string $sealedValue): string
+    public static function sealedString(array|string $sealedValue): string
     {
         return is_string($sealedValue) ? $sealedValue : json_encode($sealedValue, JSON_THROW_ON_ERROR);
     }

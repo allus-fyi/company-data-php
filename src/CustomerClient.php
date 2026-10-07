@@ -259,6 +259,9 @@ final class CustomerClient
      * `source_private: true` before it is sent (the run is read once for the rule), so every later
      * reader treats it as private.
      *
+     * Every `answers[].values[].value` goes out as the sealed wrapper's JSON string, whether the
+     * caller passed the array {@see encryptFlowAnswer()} returns or a string.
+     *
      * @param array<string,mixed> $body
      */
     public function submitFlowAnswers(string $connectionId, string $runId, array $body): mixed
@@ -274,6 +277,19 @@ final class CustomerClient
             foreach ($body['answers'] as $i => $a) {
                 if (is_array($a) && is_string($a['slug'] ?? null) && FlowPlugins::isDraftPrivate($view, $a['slug'], $slugs)) {
                     $body['answers'][$i]['source_private'] = true;
+                }
+            }
+        }
+
+        if (is_array($body['answers'] ?? null)) {
+            foreach ($body['answers'] as $i => $a) {
+                if (!is_array($a) || !is_array($a['values'] ?? null)) {
+                    continue;
+                }
+                foreach ($a['values'] as $j => $v) {
+                    if (is_array($v) && ($v['value'] ?? null) !== null) {
+                        $body['answers'][$i]['values'][$j]['value'] = Client::sealedString($v['value']);
+                    }
                 }
             }
         }

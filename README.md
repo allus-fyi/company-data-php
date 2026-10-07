@@ -706,6 +706,10 @@ Call `checkFlowValue` before `encryptFlowAnswer` seals a value. `$customer->subm
 the run once and marks every answer derived from another party's private source (the same rule)
 `source_private: true` before it is sent.
 
+The wire shape of each `answers[].values[].value` is the sealed wrapper serialized as a JSON string.
+`submitFlowAnswers` and `$customer->submitFlowAnswers` send it that way, whether `values[].value` is the
+array `encryptFlowAnswer` returns or a string; `encryptFlowAnswer` itself still returns the array.
+
 **The evaluator helpers** (static, pure, on `Allus\CompanyData\FlowCondition`):
 `expandPluginAnswers($answers, $pluginSlugs)` — a new map where each finished plugin answer becomes
 its summary (the blocks' values joined by `' / '`) plus `slug.<block>`, `slug.<block>.id` (a
