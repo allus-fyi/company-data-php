@@ -6,6 +6,7 @@ namespace Allus\Examples\CompanyData;
 
 use Allus\CompanyData\Client;
 use Allus\CompanyData\Crypto\BinaryHandle;
+use Allus\CompanyData\Errors\ApiError;
 use Allus\CompanyData\Errors\WebhookError;
 use Allus\CompanyData\Model\Change;
 use Allus\Examples\Family;
@@ -64,8 +65,8 @@ final class Handlers implements Family
     private const CALL_REQUEST_FIELDS = 'Client::requestFields — GET /api/company-data/request-fields: your own request-field catalog, fetched once and cached for the life of the client';
     private const CALL_PROCESS_CHANGES = 'Client::processChanges — drains the change feed through the crash-safe pump: handler before ack, at-least-once (dedup on Change.id), failures to the local dead-letter store';
     private const CALL_CREATE_DOCUMENT = 'Client::createDocument — %s';
-    private const CALL_LIST_DOCUMENTS = 'Client::listDocuments — GET /api/company-data/documents: pages the service\'s documents so cleanup finds everything it created';
-    private const CALL_DELETE_DOCUMENT = 'Client::deleteDocument — DELETE /api/company-data/documents/%s';
+    private const CALL_DELETE_DOCUMENT = 'Client::deleteDocument — DELETE /api/company-data/documents/%s: one document this example created';
+    private const CALL_END_DOCUMENT = 'Client::updateDocumentStatus — PUT /api/company-data/documents/%s: status ended, because the platform refuses to delete a contract that carries a signature';
     private const CALL_WEBHOOK_STARTED = '(webhook run started) — POST /webhook receives each delivery; every poll also drains the change feed as a fallback';
     private const CALL_VERIFY_WEBHOOK = 'Client::verifyWebhook — checks the delivery\'s X-Allus-Signature HMAC against the secret configured for its X-Allus-Webhook-Id; a failure answers 401';
     private const CALL_PARSE_WEBHOOK = 'Client::parseWebhook — turns the verified body into a typed Change, decrypting its value with the service key';
@@ -134,6 +135,10 @@ final class Handlers implements Family
         }
         if ($id === self::DOCUMENTS) {
             $meta['share_code'] = (string) ($in['shareCode'] ?? ''); // the per-person/contract target
+            // The saved service the run and the clean-up act as; the record of created documents is kept
+            // across saves, each entry tagged with the service that created it.
+            $meta['client_id'] = (string) ($in['clientId'] ?? '');
+            $meta['created_documents'] = $this->createdDocuments();
             // Preserve presence so doDocuments() can distinguish an explicit empty selection from
             // an absent selection; absence means all document types.
             if (array_key_exists('documentTypes', $in)) {
@@ -350,6 +355,7 @@ final class Handlers implements Family
             }
             $calls[] = sprintf(self::CALL_CREATE_DOCUMENT, $spec['label']);
             $doc = $client->createDocument($opts);
+            $this->recordCreatedDocument((string) $doc->id);
             $docs[] = [
                 'index' => count($docs) + 1,
                 'label' => $spec['label'],
@@ -363,9 +369,10 @@ final class Handlers implements Family
     // ── POST /api/scenarios/{id}/cleanup (companydata:documents only) ──────────
 
     /**
-     * Delete every document the documents scenario has created on this service, so a reused
-     * account can reset between runs — companydata:documents is additive (createDocument mints a
-     * new document each run; nothing deletes a prior run's). Not part of the generic Family
+     * Remove the documents the documents scenario created, so a reused account can reset between
+     * runs — companydata:documents is additive (createDocument mints a new document each run;
+     * nothing deletes a prior run's). Only the ids this example recorded are touched; a document of
+     * the service it did not create is never listed or deleted. Not part of the generic Family
      * contract: routed directly, the same way enroll() is identity-only.
      */
     public function cleanup(string $id): Response
@@ -380,25 +387,79 @@ final class Handlers implements Family
     }
 
     /**
+     * Delete each document recorded for the saved service. A contract that carries a signature is refused
+     * with documents.contract_immutable: it is set to status ended instead and reported in `ended`, and the
+     * clean-up goes on. A document already gone (documents.not_found) needs nothing. Each id leaves the
+     * record as soon as it is dealt with, so a failure part-way leaves only the unprocessed ones. Documents
+     * recorded for another service stay in the record untouched until that service is saved again.
+     *
      * @param array<int,string> $calls
      * @return array<string,mixed>
      */
     private function doCleanupDocuments(Client $client, array &$calls): array
     {
         $deleted = 0;
-        while (true) {
-            $calls[] = self::CALL_LIST_DOCUMENTS;
-            $page = $client->listDocuments(null, null, 100, 0);
-            if ($page === []) {
-                break;
+        $ended = [];
+        $clientId = (string) ($this->rt->readConfigMeta(self::DOCUMENTS)['client_id'] ?? '');
+        foreach ($this->createdDocuments() as $rec) {
+            if ($rec['client_id'] !== $clientId) {
+                continue;
             }
-            foreach ($page as $doc) {
-                $calls[] = sprintf(self::CALL_DELETE_DOCUMENT, $doc->id);
-                $client->deleteDocument($doc->id);
+            $docId = $rec['id'];
+            $calls[] = sprintf(self::CALL_DELETE_DOCUMENT, $docId);
+            try {
+                $client->deleteDocument($docId);
                 $deleted++;
+            } catch (ApiError $e) {
+                if ($e->errorKey === 'documents.contract_immutable') {
+                    $calls[] = sprintf(self::CALL_END_DOCUMENT, $docId);
+                    $client->updateDocumentStatus($docId, 'ended');
+                    $ended[] = $docId;
+                } elseif ($e->errorKey !== 'documents.not_found') {
+                    throw $e;
+                }
+                // not_found: already removed elsewhere — nothing left to clean up
             }
+            $this->forgetCreatedDocument($docId, $clientId);
         }
-        return ['deleted' => $deleted];
+        return ['deleted' => $deleted, 'ended' => $ended];
+    }
+
+    /**
+     * The documents this example created, kept in the documents scenario's setup sidecar.
+     *
+     * @return array<int,array{id:string,client_id:string}>
+     */
+    private function createdDocuments(): array
+    {
+        $out = [];
+        foreach ((array) ($this->rt->readConfigMeta(self::DOCUMENTS)['created_documents'] ?? []) as $rec) {
+            $rec = (array) $rec;
+            $out[] = ['id' => (string) ($rec['id'] ?? ''), 'client_id' => (string) ($rec['client_id'] ?? '')];
+        }
+        return $out;
+    }
+
+    private function recordCreatedDocument(string $docId): void
+    {
+        $clientId = (string) ($this->rt->readConfigMeta(self::DOCUMENTS)['client_id'] ?? '');
+        $this->writeCreatedDocuments([...$this->createdDocuments(), ['id' => $docId, 'client_id' => $clientId]]);
+    }
+
+    private function forgetCreatedDocument(string $docId, string $clientId): void
+    {
+        $this->writeCreatedDocuments(array_values(array_filter(
+            $this->createdDocuments(),
+            static fn (array $r): bool => !($r['id'] === $docId && $r['client_id'] === $clientId),
+        )));
+    }
+
+    /** @param array<int,array{id:string,client_id:string}> $all */
+    private function writeCreatedDocuments(array $all): void
+    {
+        $meta = $this->rt->readConfigMeta(self::DOCUMENTS);
+        $meta['created_documents'] = $all;
+        $this->rt->writeConfigMeta(self::DOCUMENTS, $meta);
     }
 
     // ── companydata:webhook — the accumulating run + public receiver ────────────
