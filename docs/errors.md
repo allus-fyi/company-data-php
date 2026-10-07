@@ -63,6 +63,17 @@ as it does when the connection drops; a `Transport` you pass in keeps its own
 limit (`CurlTransport` takes its limit in seconds as its constructor argument). A
 request given up may still have completed on the platform.
 
+## A body that cannot be read to its end fails the call
+
+When the connection closes while the body of the answer is still arriving, the call
+raises `ApiError` with status 0 and never returns the bytes that did arrive. With
+ext-curl the transport checks `curl_exec`. Without it, the stream fallback asks for
+HTTP/1.0, so the answer is delimited by `Content-Length` or by the close of the
+connection and is never chunked; it raises on a body shorter than its
+`Content-Length` and on a read that timed out before the end. A body ended by the
+platform closing the connection is complete when no Content-Length was declared.
+The SDK does not send the request again.
+
 ## Every request opens its own connection
 
 Every request of the SDK's own transport opens its own connection, so a

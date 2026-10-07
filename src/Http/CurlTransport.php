@@ -128,23 +128,45 @@ final class CurlTransport implements Transport
                 'content' => $body ?? '',
                 'timeout' => $this->timeout,
                 'ignore_errors' => true, // so non-2xx still returns a body
+                // HTTP/1.0 gets no chunked answer: the wrapper de-chunks silently and cannot say
+                // whether the terminating chunk arrived, so a body is complete only when it is
+                // delimited by Content-Length or by the close of the connection.
+                'protocol_version' => 1.0,
             ],
         ]);
-        $resp = @file_get_contents($url, false, $context);
-        if ($resp === false) {
+        $stream = @fopen($url, 'r', false, $context);
+        if ($stream === false) {
             throw new ApiError(0, null, "request to {$url} failed");
+        }
+        $resp = stream_get_contents($stream);
+        $timedOut = (bool) (stream_get_meta_data($stream)['timed_out'] ?? false);
+        fclose($stream);
+        if ($resp === false || $timedOut) {
+            throw new ApiError(0, null, "request to {$url} failed: the response body could not be read to its end");
         }
         $status = 0;
         $responseHeaders = [];
         // $http_response_header is populated by the stream wrapper.
         foreach ($http_response_header ?? [] as $line) {
             if (preg_match('#^HTTP/\S+\s+(\d+)#', $line, $m) === 1) {
+                // A redirect adds one header block per hop; only the last one describes $resp.
                 $status = (int) $m[1];
+                $responseHeaders = [];
                 continue;
             }
             $parts = explode(':', $line, 2);
             if (count($parts) === 2) {
                 $responseHeaders[trim($parts[0])] = trim($parts[1]);
+            }
+        }
+        // The stream wrapper hands back the bytes it read and says nothing when the connection
+        // ended before the announced length; a body shorter than its Content-Length is a failed
+        // request, never a response.
+        if ($method !== 'HEAD') {
+            $lower = array_change_key_case($responseHeaders, CASE_LOWER);
+            if (isset($lower['content-length'])
+                && ctype_digit($lower['content-length']) && strlen($resp) < (int) $lower['content-length']) {
+                throw new ApiError(0, null, "request to {$url} failed: the response body ended before its announced length");
             }
         }
         return new Response($status, $resp, $responseHeaders);
