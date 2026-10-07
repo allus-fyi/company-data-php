@@ -240,6 +240,20 @@ final class HttpClient
     }
 
     /**
+     * POST a JSON body returning the whole 2xx response, no parse — the counterpart of
+     * {@see getResponse} for a route that answers JSON whatever the configured format is; the
+     * caller parses it with {@code parseBody($resp, false)}. Auth/refresh/retry and error mapping
+     * are identical to {@see post}.
+     *
+     * @param array<string,mixed>|list<mixed> $jsonBody
+     */
+    public function postResponse(string $path, array $jsonBody): Response
+    {
+        /** @var Response */
+        return $this->request('POST', $path, null, $jsonBody, null, null, false, true);
+    }
+
+    /**
      * PUT {@code $path} with a JSON body → parsed body.
      *
      * @param array<string,mixed>|list<mixed>|null $jsonBody

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Crypto;
 
 use Allus\CompanyData\Errors\DecryptError;
+use Allus\CompanyData\Http\HttpClient;
 use phpseclib3\Crypt\Common\PrivateKey;
 use phpseclib3\Crypt\RSA;
 use phpseclib3\Crypt\RSA\PrivateKey as RSAPrivateKey;
@@ -165,6 +166,26 @@ final class Crypto
             throw new DecryptError('decrypted plaintext is not valid UTF-8');
         }
         return $plaintext;
+    }
+
+    /**
+     * One user's public key through {@code POST /api/keys/batch}, or null when the user has none.
+     *
+     * The route answers JSON whatever the client's configured format is, so the body is parsed as
+     * JSON. The answer is a flat map {@code {user_id: {public_key, public_key_sha256,
+     * recipient_has_key}}} carrying every requested id; a user without a key has {@code public_key}
+     * null. {@code $http} is the client's own HTTP layer, so auth, rebase and retry are its own.
+     *
+     * @throws DecryptError when the returned key is malformed.
+     */
+    public static function fetchBatchPublicKey(HttpClient $http, string $userId): ?RSAPublicKey
+    {
+        $body = $http->parseBody($http->postResponse('/api/keys/batch', ['user_ids' => [$userId]]), false);
+        $entry = is_array($body) ? ($body[$userId] ?? null) : null;
+        if (is_array($entry)) {
+            $entry = $entry['public_key'] ?? null;
+        }
+        return is_string($entry) && $entry !== '' ? self::loadPublicKey($entry) : null;
     }
 
     /**

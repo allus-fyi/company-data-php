@@ -153,6 +153,14 @@ final class Client
      */
     private array $pubKeyCache = [];
 
+    /**
+     * Run-party public keys, by the party's user id. A rotation signal names a share code, which
+     * does not say which user id it belongs to, so {@see invalidatePublicKey} drops every entry.
+     *
+     * @var array<string,RSAPublicKey>
+     */
+    private array $userPubKeyCache = [];
+
     /** The service RSA public key (public half of the loaded private key), derived once. */
     private ?RSAPublicKey $servicePublicKey = null;
 
@@ -601,6 +609,7 @@ final class Client
     public function invalidatePublicKey(string $shareCode): void
     {
         unset($this->pubKeyCache[$shareCode]);
+        $this->userPubKeyCache = [];
     }
 
     /**
@@ -780,6 +789,26 @@ final class Client
         }
         $key = Crypto::loadPublicKey($spki);
         $this->pubKeyCache[$shareCode] = $key;
+        return $key;
+    }
+
+    /**
+     * Fetch + cache a run party's RSA public key by its user id
+     * ({@code POST /api/keys/batch}).
+     *
+     * @throws ApiError when the API returns no public key for the user.
+     * @throws DecryptError when the returned key is malformed.
+     */
+    private function userPublicKey(string $userId): RSAPublicKey
+    {
+        if (isset($this->userPubKeyCache[$userId])) {
+            return $this->userPubKeyCache[$userId];
+        }
+        $key = Crypto::fetchBatchPublicKey($this->http, $userId);
+        if ($key === null) {
+            throw new ApiError(0, 'keys.not_found', "no public key for user {$userId}");
+        }
+        $this->userPubKeyCache[$userId] = $key;
         return $key;
     }
 
@@ -1624,11 +1653,9 @@ final class Client
 
     /**
      * Resolve a person party's RSA public key for per-party answer encryption. Prefers a
-     * caller-supplied key, else resolves the person's share_code from the run's connection →
-     * {@code GET /api/keys/{code}}.
-     *
-     * Integration gap: the run payload exposes neither person public keys nor per-binding share
-     * codes, so the SDK resolves via the connection. Supply {@code $partyPubKeys} to skip the lookup.
+     * caller-supplied key, else fetches the party's key by its user id. A run's
+     * {@code connectionId} names the company-connection pair, not a service link, so it is never
+     * used to look the party up. Supply {@code $partyPubKeys} to skip the lookup.
      *
      * @param array<string,RSAPublicKey> $partyPubKeys
      */
@@ -1637,8 +1664,7 @@ final class Client
         if (isset($partyPubKeys[$uid])) {
             return $partyPubKeys[$uid];
         }
-        $sc = $this->resolveShareCode($run->connectionId, $uid);
-        return $this->recipientPublicKey($sc);
+        return $this->userPublicKey($uid);
     }
 
     /**
@@ -1658,7 +1684,7 @@ final class Client
      * private source is submitted marked `source_private`.
      *
      * @param array<string,mixed>        $fill
-     * @param array<string,RSAPublicKey> $partyPubKeys supply to skip the share_code → /api/keys lookup.
+     * @param array<string,RSAPublicKey> $partyPubKeys supply to skip the by-user-id key fetch (POST /api/keys/batch).
      */
     public function submitFlowAnswers(FlowRun $run, array $fill, array $partyPubKeys = []): FlowRun
     {

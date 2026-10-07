@@ -770,12 +770,7 @@ final class CustomerClient
     private function batchKey(string $userId): ?RSAPublicKey
     {
         if (!array_key_exists($userId, $this->pubkeyCache)) {
-            $body = $this->http->post(self::KEYS . '/batch', ['user_ids' => [$userId]]);
-            $spki = null;
-            if (is_array($body) && isset($body['keys']) && is_array($body['keys'])) {
-                $spki = isset($body['keys'][$userId]) ? (string) $body['keys'][$userId] : null;
-            }
-            $this->pubkeyCache[$userId] = $spki !== null && $spki !== '' ? Crypto::loadPublicKey($spki) : null;
+            $this->pubkeyCache[$userId] = Crypto::fetchBatchPublicKey($this->http, $userId);
         }
         return $this->pubkeyCache[$userId];
     }
