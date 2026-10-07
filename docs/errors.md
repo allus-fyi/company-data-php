@@ -63,6 +63,12 @@ as it does when the connection drops; a `Transport` you pass in keeps its own
 limit (`CurlTransport` takes its limit in seconds as its constructor argument). A
 request given up may still have completed on the platform.
 
+## Every request opens its own connection
+
+Every request of the SDK's own transport opens its own connection, so a
+connection the platform closed between two requests never fails a call, and the
+SDK sends no request twice.
+
 ## 503 `db.writes_paused` — saving is paused, retry
 
 While the platform cannot complete a save in every region, a call can answer
