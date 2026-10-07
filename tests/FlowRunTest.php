@@ -84,16 +84,19 @@ final class FlowRunTest extends TestCase
         };
     }
 
-    private function keyGet(string $spki): callable
+    /**
+     * Answers the by-user-id key fetch (POST /api/keys/batch) with $spki for the person party and
+     * hands every other write to $next.
+     */
+    private function keysBatch(string $spki, callable $next): callable
     {
-        return function (string $url) use ($spki): Response {
-            if (str_ends_with($url, '/company-data/connections/csc-1')) {
-                return FakeTransport::json(200, ['connection_id' => 'csc-1', 'share_code' => 'ABC123']);
+        return function (string $method, string $url, ?string $body) use ($spki, $next): Response {
+            if (str_ends_with($url, '/api/keys/batch')) {
+                return FakeTransport::json(200, [
+                    self::PERSON_UID => ['public_key' => $spki, 'recipient_has_key' => true],
+                ]);
             }
-            if (str_ends_with($url, '/api/keys/ABC123')) {
-                return FakeTransport::json(200, ['public_key' => $spki]);
-            }
-            throw new \AssertionError("unexpected GET {$url}");
+            return $next($method, $url, $body);
         };
     }
 
@@ -200,11 +203,11 @@ final class FlowRunTest extends TestCase
     {
         $spki = Vector::publicSpkiB64();
         $captured = [];
-        $client = $this->clientRw($this->keyGet($spki), function (string $method, string $url, ?string $body) use (&$captured): Response {
+        $client = $this->clientRw($this->noGet(), $this->keysBatch($spki, function (string $method, string $url, ?string $body) use (&$captured): Response {
             $captured['url'] = $url;
             $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
             return FakeTransport::json(200, self::runObj('awaiting_person', 'n2'));
-        });
+        }));
         $run = FlowRun::fromApi(self::runObj());
         $out = $client->submitFlowAnswers($run, ['company_name' => 'ACME BV']);
 
@@ -214,8 +217,11 @@ final class FlowRunTest extends TestCase
         $forUsers = array_map(fn ($v) => $v['for_user_id'], $values);
         sort($forUsers);
         self::assertSame([self::COMPANY_UID, self::PERSON_UID], $forUsers);
-        foreach ($values as $v) {
-            self::assertSame(1, $v['value']['_enc']);
+        // a sealed value travels as the wrapper's JSON string
+        foreach ($values as $i => $v) {
+            self::assertIsString($v['value']);
+            $values[$i]['value'] = json_decode($v['value'], true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame(1, $values[$i]['value']['_enc']);
         }
         // company copy round-trips with the service private key
         $companyVal = null;
@@ -237,10 +243,10 @@ final class FlowRunTest extends TestCase
     {
         $spki = Vector::publicSpkiB64();
         $captured = [];
-        $client = $this->clientRw($this->keyGet($spki), function (string $method, string $url, ?string $body) use (&$captured): Response {
+        $client = $this->clientRw($this->noGet(), $this->keysBatch($spki, function (string $method, string $url, ?string $body) use (&$captured): Response {
             $captured['body'] = json_decode((string) $body, true, flags: JSON_THROW_ON_ERROR);
             return FakeTransport::json(200, self::runObj('awaiting_person', 'n_end'));
-        });
+        }));
         $run = FlowRun::fromApi(self::runObj());
         $client->submitFlowAnswers($run, ['tier' => 'vip']);
         self::assertSame('n_end', $captured['body']['next_node']);
@@ -308,7 +314,7 @@ final class FlowRunTest extends TestCase
             'edges' => [],
         ];
         $posts = [];
-        $getRouter = function (string $url) use ($spki, &$posts, $single): Response {
+        $getRouter = function (string $url) use (&$posts, $single): Response {
             if (str_ends_with($url, '/company-data/flow-runs/run-1')) {
                 $status = $posts === [] ? 'awaiting_company' : 'awaiting_signature';
                 $participants = [[
@@ -321,12 +327,6 @@ final class FlowRunTest extends TestCase
                 ]];
                 return FakeTransport::json(200, self::runObj($status, 'n1', [], $single, 'document', $participants));
             }
-            if (str_ends_with($url, '/company-data/connections/csc-1')) {
-                return FakeTransport::json(200, ['connection_id' => 'csc-1', 'share_code' => 'ABC123']);
-            }
-            if (str_ends_with($url, '/api/keys/ABC123')) {
-                return FakeTransport::json(200, ['public_key' => $spki]);
-            }
             throw new \AssertionError("unexpected GET {$url}");
         };
         $writeRouter = function (string $method, string $url, ?string $body) use (&$posts, $single): Response {
@@ -337,7 +337,7 @@ final class FlowRunTest extends TestCase
             self::assertStringEndsWith('/generate', $url);
             return FakeTransport::json(200, self::GENERATED);
         };
-        $client = $this->clientRw($getRouter, $writeRouter);
+        $client = $this->clientRw($getRouter, $this->keysBatch($spki, $writeRouter));
         $run = $client->processFlowRun('run-1', fn (array $node, array $answers): array => ['company_name' => 'ACME BV']);
 
         self::assertTrue((bool) array_filter($posts, fn ($p) => str_ends_with($p, '/answers')));
