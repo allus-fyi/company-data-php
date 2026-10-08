@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Allus\CompanyData\Model;
 
 use Allus\CompanyData\Crypto\BinaryHandle;
+use Allus\CompanyData\Errors\DecryptError;
 
 /**
  * A single answer for one of YOUR request slots.
@@ -13,6 +14,12 @@ use Allus\CompanyData\Crypto\BinaryHandle;
  * {@see BinaryHandle}); {@see $live} = the person chose "keep connected"
  * (auto-updates) vs a one-time snapshot; {@see $updatedAt} = when this answer last
  * changed. Both ride on the Value (per-answer), not the definition.
+ *
+ * {@see $unreadable} marks an answer that is present but could not be opened with the
+ * configured service key — sealed to a key the service has since replaced, or a wrong
+ * configured key. Such a value carries {@see $value} null and {@see $verified} false, and
+ * never fails the read it arrived in. An unanswered value is {@see $value} null with
+ * {@see $unreadable} false.
  */
 final class Value
 {
@@ -49,11 +56,21 @@ final class Value
         public readonly ?string $verifiedProvider = null,
         public readonly ?string $verificationId = null,
         public readonly array $raw = [],
+        /**
+         * True when the answer is present but could not be opened with the configured service
+         * key; {@see $value} is then null and {@see $verified} false. Every value of every
+         * connection reading true points at the configured key.
+         */
+        public readonly bool $unreadable = false,
     ) {
     }
 
     /**
      * Build a typed Value from one hardened {value|value_url, live, updatedAt} entry.
+     *
+     * An entry whose value cannot be opened ({@see DecryptError}) is built marked
+     * {@see $unreadable}, with no plaintext; every other member is read from the entry as for a
+     * readable one. Any other failure propagates.
      *
      * @param array<string,mixed> $obj
      * @param callable(): FieldTypes $fieldTypes the served registry, taken as a CALLABLE so the
@@ -70,7 +87,13 @@ final class Value
     ): self {
         $live = (bool) Coerce::bool($obj['live'] ?? null);
         $updatedAt = Coerce::dateTime($obj['updatedAt'] ?? ($obj['updated_at'] ?? null));
-        $typed = ValueTyping::typed($obj, $fieldType, $fieldTypes, $decryptValue, $binaryFetch);
+        $unreadable = false;
+        try {
+            $typed = ValueTyping::typed($obj, $fieldType, $fieldTypes, $decryptValue, $binaryFetch);
+        } catch (DecryptError) {
+            $typed = null;
+            $unreadable = true;
+        }
         return new self(
             value: $typed,
             live: $live,
@@ -82,6 +105,7 @@ final class Value
             verifiedProvider: self::optString($obj['verified_provider'] ?? null),
             verificationId: self::optString($obj['verification_id'] ?? null),
             raw: $obj,
+            unreadable: $unreadable,
         );
     }
 

@@ -177,7 +177,9 @@ reason. If you catch it, wait `$err->retryAfter` (or a default) before retrying.
 | `Client::fromConfig` / `fromEnv` / `new Client(...)` | `ConfigError` |
 | Token / any call (auth) | `AuthError` |
 | `connections`, `connection`, `requestFields`, `logs`, pump drains | `ApiError`, `RateLimitError` |
-| Value access / `BinaryHandle::bytes()` / pump delivery | `DecryptError` |
+| `BinaryHandle::bytes()` / pump delivery / `parseWebhook` / flow-run routing and generation | `DecryptError` |
+| `connections`, `connection` (a value that cannot be opened) | none — the `Value` reads `unreadable` |
+| `flowRunAnswers` (an answer that cannot be opened) | none — its slug is listed in `FlowRunAnswers->unreadable` |
 | `verifyWebhook` / `parseWebhook` / `handleWebhook` | `WebhookError` (`verifyWebhook` returns `false` rather than throwing on a bad signature) |
 
 ## Example
@@ -198,7 +200,7 @@ try {
 } catch (RateLimitError $e) {
     sleep((int) ($e->retryAfter ?? 60));
 } catch (DecryptError) {
-    // wrong service key or corrupt data
+    // a binary value's bytes could not be opened (wrong service key or corrupt data)
 } catch (ApiError $e) {
     log($e->status, $e->errorKey, $e->getMessage());
 }

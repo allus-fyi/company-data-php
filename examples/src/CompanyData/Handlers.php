@@ -220,6 +220,7 @@ final class Handlers implements Family
                     'value' => $this->stringifyValue($v->value),
                     'live' => $v->live,
                     'at' => $v->updatedAt?->format(DATE_ATOM),
+                    'unreadable' => $v->unreadable,
                 ];
             }
             $connections[] = [

@@ -394,7 +394,7 @@ final class Handlers implements Family
         $answers = $client->flowRunAnswers($flowRun);
         $ciphers = self::ownCipherBySlug($flowRun);
         $answersOut = [];
-        foreach ($answers as $slug => $value) {
+        foreach ($answers->answers as $slug => $value) {
             $answersOut[] = ['slug' => (string) $slug, 'value' => $value, 'cipher' => $ciphers[$slug] ?? null];
         }
         $run['answers'] = $answersOut;

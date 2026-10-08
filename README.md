@@ -228,7 +228,8 @@ Each `$conn->values[$slug]` is already decrypted (or a lazy binary handle).
 
 * **Params:** `$limit` — page size (default 100); `$offset` — starting offset.
 * **Returns:** `\Generator<int, Connection>`.
-* **Throws:** `AuthError`, `ApiError`, `DecryptError` (per value, at access), `RateLimitError` (after the iterator's bounded internal backoff — see [Rate limits](#rate-limits)).
+* **Throws:** `AuthError`, `ApiError`, `RateLimitError` (after the iterator's bounded internal backoff — see [Rate limits](#rate-limits)).
+* **A value the service key cannot open never ends the listing.** It is returned in its own place with `value` `null` and `unreadable` `true` (see [`Value`](#value)), and every other value and connection is returned as usual. When every value of every connection reads `unreadable`, check the configured `service_private_key`.
 
 > **Heavily rate-limited.** Use for the initial full sync + occasional
 > reconciliation only — never as a poll substitute for the changes feed. The
@@ -251,7 +252,7 @@ Fetch one connection by its connection id (`GET /api/company-data/connections/{i
 
 * **Params:** `$id` — the connection id (`Connection->id`).
 * **Returns:** one `Connection`. Note: this endpoint returns `{connection_id, user_id, values}` and **no** `display_name`/`connected_at`, so those identity fields are `null` here (the list endpoint carries them).
-* **Throws:** `AuthError`, `ApiError` (404 if unknown), `DecryptError`, `RateLimitError`.
+* **Throws:** `AuthError`, `ApiError` (404 if unknown), `RateLimitError`. A value the service key cannot open is returned marked `unreadable`, never raised.
 
 ```php
 $conn  = $client->connection($connId);
@@ -543,12 +544,12 @@ $value = $doc->payloadKind === 'json' ? $doc->json() : $doc->value;   // json() 
 ### Contract flows & identity (#491)
 
 ```php
-flowRunAnswers(FlowRun|string $run): array    // #491 gap 1 — a completed run's DECRYPTED answers {slug: plaintext}
+flowRunAnswers(FlowRun|string $run): FlowRunAnswers   // a completed run's DECRYPTED answers + the slugs that would not open
 flowRunDocument(string $runId, string $outputKey): string   // the company's own copy of one generated output document (plaintext bytes)
 identity(): array                             // #491 gap 3 — this client's {company_user_id, service_id}
 ```
 
-* `flowRunAnswers($run)` returns a completed run's decrypted `{slug => plaintext}` answers (accepts a fetched `FlowRun` or a run id). It is the public accessor for a finished run's answers, which `processFlowRun` returns untouched.
+* `flowRunAnswers($run)` returns a completed run's answers as a `FlowRunAnswers` (accepts a fetched `FlowRun` or a run id): `->answers` is the decrypted `{slug => plaintext}` map, `->unreadable` the list of slugs whose answer the service key could not open (empty when every answer opened). An unreadable answer is left out of `->answers` and never fails the call. It is the public accessor for a finished run's answers, which `processFlowRun` returns untouched.
 * A document leaf can produce several named **output documents** (e.g. "Contract" and "Addendum"). `generateFlowDocument($run)` returns `['documents' => [...], 'status' => ...]` — one `[output_key, party_key, document_id, position]` per produced (output document, participant); `position` is the step's 1-based place in the run's ONE signing line (one signer at a time, across every output), `null` for a party an output's signer list does not name. A repeat answers the same set.
 * A `FlowRun`'s `participants` are `FlowRunParticipant` objects (`partyKey`, `personUserId`, `connectionId`, `documents`); `documents` is that participant's own copy of each output document — `FlowRunParticipantDocument` (`outputKey`, `name`, `documentId`, `documentStatus`, `requiresSignature`, `requiresAcceptance`, `position`, `action`, `actedAt`), ordered by line position.
 * `flowRunDocument($runId, $outputKey)` downloads the company's own service-key-encrypted copy of one output document and returns the plaintext file bytes — the honest completion step (fill → complete → `flowRunAnswers` → `flowRunDocument` per output). A `404` is `flows.run_not_found` for an unknown run, or `flows.no_document` when that output was not produced or the company is not a bound party.
@@ -855,7 +856,7 @@ You work with these objects and nothing else (`use Allus\CompanyData\Model\…`)
 RequestField { slug, label, type, oneTime, mandatory, verified, verifiedMaxAgeDays }
 Connection   { id, personId, displayName, connectedAt, values: array<slug, Value> }
 Value        { value, live, updatedAt, verified, verifiedAt, verifiedExpiresAt,
-               verifiedMethod, verifiedProvider, verificationId }
+               verifiedMethod, verifiedProvider, verificationId, unreadable }
 Change       { id, event, personId, slug?, value?, live?, at }
 LogEntry     { type, message, metadata, at }
 ```
@@ -882,8 +883,11 @@ source slug, no `field_id`, not even via `->raw`.
 | `verifiedMethod` | HOW allme bound the value: `email_code` \| `sms_code` \| `sumsub_id` \| `sumsub_address`. |
 | `verifiedProvider` | WHO established the proof: `allme` \| `sumsub`. |
 | `verificationId` | The proof id to quote back to allme in a dispute — it resolves the full record, including facts you never receive. |
+| `unreadable` | `true` when the answer is present but the configured service key cannot open it — sealed to a key the service has since replaced, or a wrong configured key. `value` is then `null` and `verified` `false`; every other property is read as for a readable value. |
 
-The last three are the **proof metadata** and arrive **together or not at all**: a value bound before
+**Not readable is not empty.** An unanswered value is `value` `null` with `unreadable` `false`; a value that could not be opened is `value` `null` with `unreadable` `true`. A binary value is a lazy handle and is never marked: a binary whose file cannot be opened fails when its bytes are read. When every value of every connection reads `unreadable`, check the configured `service_private_key`.
+
+`verifiedMethod`, `verifiedProvider` and `verificationId` are the **proof metadata** and arrive **together or not at all**: a value bound before
 the proof log existed carries the four verification keys and none of these, so all three read `null`.
 They are readable whatever the verified boolean says — that boolean stays the only trust decision.
 
@@ -1316,7 +1320,7 @@ All under `Allus\CompanyData\Errors\…`. Same taxonomy + names across all six S
 | `ConfigError` | Missing/invalid config, unreadable key file, or wrong passphrase — at construction (fail fast). |
 | `AuthError` | Token fetch/refresh failed (bad `client_id`/`secret`, revoked client); or a 401 survives the one automatic refresh-and-retry. |
 | `ApiError` | Any non-2xx from the API; carries `->status`, `->errorKey` (when present), and the message. |
-| `DecryptError` | A ciphertext wrapper is malformed, the key is wrong, or the GCM tag mismatches. Surfaces when a value is accessed/decrypted. |
+| `DecryptError` | A ciphertext wrapper is malformed, the key is wrong, or the GCM tag mismatches. Surfaces when a binary value's bytes are read, on a change event (the pump dead-letters it; a webhook parse throws it) and from flow-run routing and generation. `connections`/`connection` never throw it for a value — they mark it `unreadable` — and `flowRunAnswers` lists such an answer under `unreadable`. |
 | `WebhookError` | Signature verification failed, or an envelope couldn't be unwrapped/parsed. |
 | `RateLimitError` | A 429 from a rate-limited endpoint. Subclass of `ApiError` (status fixed at 429); carries `->retryAfter` (seconds, or `null`). |
 | `ValidationError` | A value failed its field type (`->slug`, `->fieldType`), or a flow field's minimum/maximum (`->bound`, `->boundValue`). |

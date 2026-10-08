@@ -18,6 +18,7 @@ use Allus\CompanyData\Model\Connection;
 use Allus\CompanyData\Model\Document;
 use Allus\CompanyData\Model\FieldTypes;
 use Allus\CompanyData\Model\FlowRun;
+use Allus\CompanyData\Model\FlowRunAnswers;
 use Allus\CompanyData\Model\LogEntry;
 use Allus\CompanyData\Model\PluginOptions;
 use Allus\CompanyData\Model\PluginOutputs;
@@ -1563,18 +1564,17 @@ final class Client
     }
 
     /**
-     * A completed run's DECRYPTED answers as {@code [slug => plaintext]}. Accepts a
-     * loaded {@see FlowRun} or a run id (fetched via {@see flowRun}). Reads the company's service-key
-     * answer copies — the intended top-level accessor for a finished run's answers (the private
-     * {@see decryptRunAnswers} it wraps is otherwise reachable only inside {@see processFlowRun},
-     * which returns an already-completed run untouched, so its answers were previously unreadable).
+     * A completed run's DECRYPTED answers. Accepts a loaded {@see FlowRun} or a run id (fetched via
+     * {@see flowRun}). Reads the company's service-key answer copies — the top-level accessor for a
+     * finished run's answers, which {@see processFlowRun} returns untouched.
      *
-     * @return array<string,string>
+     * An answer the service key cannot open never fails the call: it is left out of
+     * {@see FlowRunAnswers::$answers} and its slug is listed in {@see FlowRunAnswers::$unreadable}.
      */
-    public function flowRunAnswers(FlowRun|string $run): array
+    public function flowRunAnswers(FlowRun|string $run): FlowRunAnswers
     {
         $flowRun = $run instanceof FlowRun ? $run : $this->flowRun($run);
-        return $this->decryptRunAnswers($flowRun);
+        return $this->openRunAnswers($flowRun, true);
     }
 
     /**
@@ -1636,14 +1636,27 @@ final class Client
     }
 
     /**
-     * Decrypt the company's service-key answer copies → {@code [slug => plaintext]}. Only the rows
-     * whose {@code for_user_id} is the company's bound user_id are decryptable with the service key.
+     * Decrypt the company's service-key answer copies → {@code [slug => plaintext]}, failing on the
+     * first answer that does not open. Routing and generation read the run's whole answer set, so a
+     * missing answer there would route or fill on a value that is not the run's.
      *
      * @return array<string,string>
      */
     private function decryptRunAnswers(FlowRun $run): array
     {
+        return $this->openRunAnswers($run, false)->answers;
+    }
+
+    /**
+     * Open the company's service-key answer copies. Only the rows whose {@code for_user_id} is the
+     * company's bound user_id are decryptable with the service key. With {@code $skipUnreadable} an
+     * answer that does not open ({@see DecryptError}) is left out and its slug listed in
+     * {@see FlowRunAnswers::$unreadable}; without it the error propagates.
+     */
+    private function openRunAnswers(FlowRun $run, bool $skipUnreadable): FlowRunAnswers
+    {
         $out = [];
+        $unreadable = [];
         $serviceUid = $run->serviceUserId();
         foreach ($run->answers as $row) {
             if (($row['for_user_id'] ?? null) !== $serviceUid) {
@@ -1661,9 +1674,16 @@ final class Client
                 continue;
             }
             /** @var array<string,mixed>|string $value */
-            $out[$slug] = $this->decryptValue($value);
+            try {
+                $out[$slug] = $this->decryptValue($value);
+            } catch (DecryptError $e) {
+                if (!$skipUnreadable) {
+                    throw $e;
+                }
+                $unreadable[] = $slug;
+            }
         }
-        return $out;
+        return new FlowRunAnswers($out, $unreadable);
     }
 
     /**

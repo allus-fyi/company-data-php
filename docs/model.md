@@ -68,8 +68,17 @@ final class Value {
     public readonly ?string $verifiedProvider; // WHO established the proof: allme|sumsub
     public readonly ?string $verificationId;   // the proof id to quote back to allme in a dispute
     public readonly array $raw;
+    public readonly bool $unreadable;          // true = present but the service key cannot open it; value null, verified false
 }
 ```
+
+**Not readable is not empty.** An unanswered value is `value` `null` with `unreadable` `false`; a
+value the configured service key cannot open (sealed to a key the service has since replaced, or a
+wrong configured key) is `value` `null` with `unreadable` `true`, and never fails the
+`connections`/`connection` read it arrived in. Its other members are read as for a readable value,
+with `verified` `false`. A binary value is a lazy handle and is never marked; its failure surfaces when
+its bytes are read. When every value of every connection reads `unreadable`, check the configured
+`service_private_key`.
 
 ### `value` types — from the type's RESOLVED definition
 
@@ -81,7 +90,7 @@ no SDK release.
 | The type's resolved… | PHP `value` | Notes |
 |----------------------|-------------|-------|
 | storage lane `photo` / `document` | `BinaryHandle` | Lazy — nothing fetched/decrypted until `->bytes()`/`->save()`. |
-| primitive `composite` | `array` | The decrypted plaintext is a JSON object → parsed. A non-JSON value throws `DecryptError`. |
+| primitive `composite` | `array` | The decrypted plaintext is a JSON object → parsed. A non-JSON value is a `DecryptError`: a `Value` reads `unreadable`, a change event throws it. |
 | primitive `date` | `DateTimeImmutable` | Parsed from ISO `YYYY-MM-DD` (the leading 10 chars), date-only at UTC midnight; falls back to the raw string if unparseable. |
 | primitive `multilist` | `array` | The chosen option strings, parsed from the JSON array. |
 | anything else, and a type the registry does not carry | `string` | The decrypted plaintext. |
