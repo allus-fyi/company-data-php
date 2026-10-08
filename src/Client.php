@@ -543,6 +543,21 @@ final class Client
         );
     }
 
+    /**
+     * End one of THIS service's connections (the service side of a disconnect).
+     *
+     * {@code DELETE /api/company-data/connections/{id}}. It leaves exactly the state the
+     * customer's own disconnect leaves; the customer is told by the platform, and
+     * {@code connection_deleted} reaches your change feed and webhooks. Returns nothing.
+     * Throws {@see ApiError}: 404 {@code company_data.connection_not_found} for an id that is
+     * not a connection of this service, 409 {@code company_connections.active_contract} while the
+     * customer holds an active agreement or subscription on it.
+     */
+    public function deleteConnection(string $connectionId): void
+    {
+        $this->http->delete(self::CONNECTIONS . '/' . rawurlencode($connectionId));
+    }
+
     // ── logs (moderate rate-limit) ──────────────────────────────────────────────
 
     /**
