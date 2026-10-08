@@ -46,6 +46,7 @@ final class Config
         'oauthClientSecret' => 'ALLUS_OAUTH_CLIENT_SECRET',
         'oauthPrivateKey' => 'ALLUS_OAUTH_PRIVATE_KEY',
         'oauthKeyPassphrase' => 'ALLUS_OAUTH_KEY_PASSPHRASE',
+        'authorizeUrl' => 'ALLUS_AUTHORIZE_URL',
         'cacheDir' => 'ALLUS_CACHE_DIR',
         'format' => 'ALLUS_FORMAT',
     ];
@@ -72,6 +73,7 @@ final class Config
         'oauthClientSecret' => 'oauth_client_secret',
         'oauthPrivateKey' => 'oauth_private_key',
         'oauthKeyPassphrase' => 'oauth_key_passphrase',
+        'authorizeUrl' => 'authorize_url',
         'cacheDir' => 'cache_dir',
         'format' => 'format',
     ];
@@ -139,6 +141,9 @@ final class Config
         public readonly ?string $oauthClientSecret = null,
         public readonly ?string $oauthPrivateKey = null,
         public readonly ?string $oauthKeyPassphrase = null,
+        // OPTIONAL — the hosted sign-in page the OAuth role builds its button link on; absent
+        // means the live address (OAuthClient::DEFAULT_AUTHORIZE_URL).
+        public readonly ?string $authorizeUrl = null,
     ) {
     }
 
@@ -394,6 +399,7 @@ final class Config
             oauthClientSecret: isset($values['oauthClientSecret']) ? (string) $values['oauthClientSecret'] : null,
             oauthPrivateKey: isset($values['oauthPrivateKey']) ? (string) $values['oauthPrivateKey'] : null,
             oauthKeyPassphrase: isset($values['oauthKeyPassphrase']) ? (string) $values['oauthKeyPassphrase'] : null,
+            authorizeUrl: isset($values['authorizeUrl']) && $values['authorizeUrl'] !== '' ? (string) $values['authorizeUrl'] : null,
         );
     }
 

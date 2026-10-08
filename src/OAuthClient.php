@@ -34,18 +34,20 @@ final class OAuthClient
     private const RESPONSE_MODES = ['redirect', 'detached'];
 
     private readonly string $apiUrl;
+    private readonly string $authorizeBase;
 
     /** @param callable(int):void $sleep sleeper (seconds); tests inject a no-op. */
     public function __construct(
         private readonly Config $config,
         private readonly Transport $transport = new CurlTransport(),
-        private readonly string $authorizeBase = self::DEFAULT_AUTHORIZE_URL,
+        ?string $authorizeBase = null,
         private $sleep = null,
     ) {
         if (($config->oauthClientId ?? '') === '' || ($config->oauthRedirectUri ?? '') === '') {
             throw new ConfigError('OAuthClient requires oauth_client_id + oauth_redirect_uri (idw role)');
         }
         $this->apiUrl = rtrim($config->apiUrl, '/');
+        $this->authorizeBase = $authorizeBase ?? $config->authorizeUrl ?? self::DEFAULT_AUTHORIZE_URL;
         if ($this->sleep === null) {
             $this->sleep = static fn (int $s) => $s > 0 ? sleep($s) : null;
         }

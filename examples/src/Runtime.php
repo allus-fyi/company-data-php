@@ -13,8 +13,8 @@ namespace Allus\Examples;
  * startup; `.runtime` in the example directory unless EXAMPLE_RUNTIME_DIR names another location):
  *   - config/{sid}.json        — the canonical SDK config file a scenario runs OFF (written by
  *                                POST /api/scenarios/{id}/config from the browser settings; NOT TTL-swept)
- *   - config/{sid}.meta.json   — demo-only run parameters that are not SDK Config fields (authorize base,
- *                                one_time claims, share code, context, flow/connection ids, webhook id …)
+ *   - config/{sid}.meta.json   — demo-only run parameters that are not SDK Config fields
+ *                                (one_time claims, share code, context, flow/connection ids, webhook id …)
  *   - config/keys/<sha1>.pem   — the private-key file(s) a config references by path (mode 0600)
  *   - runs/{runId}.json        — one run's PKCE/state/nonce/outcome (+ its family + public scenario id)
  *   - webhook-route.json       — the SINGLE active company-data webhook run {webhookId, runId} (spec §2)

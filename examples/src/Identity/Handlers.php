@@ -58,7 +58,6 @@ final class Handlers implements Family
     private const OAUTH_URL_SCENARIOS = [1, 2, 3, 4, 8];
 
     private const DEFAULT_API_URL = 'https://api.allme.fyi';
-    private const DEFAULT_AUTHORIZE_BASE = OAuthClient::DEFAULT_AUTHORIZE_URL; // https://web.allme.fyi/auth
 
     /**
      * Refusal when the request carries no Host header, so the browser's origin is unknown. There is
@@ -84,8 +83,7 @@ final class Handlers implements Family
      * changes: the panel is headed "What just happened", and a list that no longer matches the code is
      * worse than a short one.
      */
-    private const CALL_IDW_BUILD = 'OAuthClient::fromConfig — builds the RP client from the saved config file: client id, secret and the registered redirect URI';
-    private const CALL_IDW_BUILD_LOCAL = 'new OAuthClient(Config::fromIdwFile(…)) — builds the RP client from the saved config file: client id, secret and the registered redirect URI';
+    private const CALL_IDW_BUILD = 'OAuthClient::fromConfig — builds the RP client from the saved config file: client id, secret, the registered redirect URI and the sign-in address';
     private const CALL_AUTH_SIGNIN = 'OAuthClient::authorizeUrl — the consent URL the person is sent to (mode signin, response_mode redirect, PKCE S256, state = this run id)';
     private const CALL_AUTH_SIGNIN_DETACHED = 'OAuthClient::authorizeUrl — the sign-in URL behind the link + QR (mode signin, response_mode detached, PKCE S256, state = this run id)';
     private const CALL_AUTH_ONE_TIME = 'OAuthClient::authorizeUrl — the consent URL the person is sent to (mode one_time, claims email + phone, PKCE S256, state = this run id)';
@@ -126,7 +124,7 @@ final class Handlers implements Family
 
     /**
      * Write the browser's setup values to a canonical SDK config FILE (spec §3). Any PEM is written to
-     * .runtime/config/keys/ and referenced by path; demo-only run parameters (authorize base, one_time
+     * .runtime/config/keys/ and referenced by path; demo-only run parameters (one_time
      * claims, share code, context) go to a meta sidecar so the config file stays a pure SDK config.
      *
      * @param array<string,mixed> $in
@@ -152,6 +150,10 @@ final class Handlers implements Family
         $secret = (string) ($in['oauthClientSecret'] ?? '');
         if ($secret !== '') {
             $cfg['oauth_client_secret'] = $secret;
+        }
+        $authorizeUrl = (string) ($in['authorizeBase'] ?? '');
+        if ($authorizeUrl !== '' && in_array($id, self::OAUTH_URL_SCENARIOS, true)) {
+            $cfg['authorize_url'] = $authorizeUrl;
         }
 
         // Any scenario whose run can carry claim values (self::CLAIM_VALUE_SCENARIOS) needs the OAuth
@@ -183,9 +185,6 @@ final class Handlers implements Family
 
         // Demo-only run parameters (NOT SDK Config fields) → meta sidecar.
         $meta = [];
-        if (in_array($id, self::OAUTH_URL_SCENARIOS, true)) {
-            $meta['authorize_base'] = (string) ($in['authorizeBase'] ?? '') ?: self::DEFAULT_AUTHORIZE_BASE;
-        }
         if ($id === 3) {
             $meta['claims'] = $this->claims($in);
         }
@@ -225,7 +224,7 @@ final class Handlers implements Family
                 $claims = $id === 3
                     ? $this->claimObjects($this->rt->readConfigMeta($sid)['claims'] ?? [])
                     : [];
-                $run['calls'] = [$this->idwBuildCall($id), match ($id) {
+                $run['calls'] = [self::CALL_IDW_BUILD, match ($id) {
                     3 => self::CALL_AUTH_ONE_TIME,
                     4 => self::CALL_AUTH_CONNECT,
                     default => self::CALL_AUTH_SIGNIN,
@@ -240,7 +239,7 @@ final class Handlers implements Family
                 $pkce = Pkce::generate();
                 $run['verifier'] = $pkce['verifier'];
                 $run['wait'] = 'detached_signin';
-                $run['calls'] = [$this->idwBuildCall($id), self::CALL_AUTH_SIGNIN_DETACHED];
+                $run['calls'] = [self::CALL_IDW_BUILD, self::CALL_AUTH_SIGNIN_DETACHED];
                 $oauth = $this->oauthClientFor($id);
                 $url = $oauth->authorizeUrl('signin', [], $runId, 'detached', $pkce['challenge']);
                 $this->rt->writeRun($runId, $run);
@@ -310,7 +309,7 @@ final class Handlers implements Family
             'status' => 'pending',
             'state' => $runId,
             'calls' => [
-                $this->idwBuildCall($id),
+                self::CALL_IDW_BUILD,
                 $responseMode === 'detached' ? self::CALL_AUTH_ENROLL_DETACHED : self::CALL_AUTH_ENROLL,
             ],
             'wait' => $responseMode === 'detached' ? 'detached_enroll' : 'enroll_redirect',
@@ -531,7 +530,7 @@ final class Handlers implements Family
 
         $accessToken = (string) ($tokenSet->getAccessToken() ?? '');
         if ($accessToken !== '') {
-            $run['calls'] = Runtime::addCall($run['calls'], $this->idwBuildCall($id));
+            $run['calls'] = Runtime::addCall($run['calls'], self::CALL_IDW_BUILD);
             $oauth = $this->oauthClientFor($id);
             $run['calls'] = Runtime::addCall($run['calls'], self::CALL_OIDC_USERINFO);
             try {
@@ -563,10 +562,8 @@ final class Handlers implements Family
     // ── SDK / OIDC client builders — built from the persisted config FILE (amendment) ──
 
     /**
-     * Build the OAuth client OFF the scenario's config file via the idw file constructor. The named
-     * OAuthClient::fromConfig() is used for the default (deployed) authorize base — the acceptance path;
-     * a non-default authorize base (local-stack option) still loads Config from the file via
-     * Config::fromIdwFile, only supplying the alternate base the wrapper cannot set.
+     * Build the OAuth client OFF the scenario's config file via the idw file constructor; the sign-in
+     * address is the file's `authorize_url` when present, else the SDK's live default.
      *
      * $transportTimeout bounds the HTTP network wait — passed for the short-cycled polls so one blackholed
      * request cannot pin the single worker for the transport's 30s default (spec §3); null keeps the SDK's
@@ -576,28 +573,7 @@ final class Handlers implements Family
     {
         $path = $this->rt->configPathFor((string) $id);
         $transport = $transportTimeout !== null ? new CurlTransport($transportTimeout) : null;
-        if ($this->usesDefaultAuthorizeBase($id)) {
-            return OAuthClient::fromConfig($path, $transport); // null → the SDK's default CurlTransport
-        }
-        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
-        return new OAuthClient(Config::fromIdwFile($path), $transport ?? new CurlTransport(), authorizeBase: $base);
-    }
-
-    /**
-     * Whether {@see oauthClientFor()} takes the named-constructor branch. The SAME predicate decides the
-     * client AND the trace entry, so the panel can never name a constructor that did not run — the
-     * local-stack option really does build the client a different way.
-     */
-    private function usesDefaultAuthorizeBase(int $id): bool
-    {
-        $base = (string) ($this->rt->readConfigMeta((string) $id)['authorize_base'] ?? '');
-        return $base === '' || $base === OAuthClient::DEFAULT_AUTHORIZE_URL;
-    }
-
-    /** The trace entry for the OAuth client {@see oauthClientFor()} just built. */
-    private function idwBuildCall(int $id): string
-    {
-        return $this->usesDefaultAuthorizeBase($id) ? self::CALL_IDW_BUILD : self::CALL_IDW_BUILD_LOCAL;
+        return OAuthClient::fromConfig($path, $transport); // null → the SDK's default CurlTransport
     }
 
     /**
