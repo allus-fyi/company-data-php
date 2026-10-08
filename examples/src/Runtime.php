@@ -10,7 +10,7 @@ namespace Allus\Examples;
  *
  * Single-worker server → requests serialize; there is NO concurrency to guard, so there are NO locks,
  * NO tombstones and NO burn-on-read. Everything lives under ONE {@see $runtimeDir} (git-ignored, wiped at
- * startup):
+ * startup; `.runtime` in the example directory unless EXAMPLE_RUNTIME_DIR names another location):
  *   - config/{sid}.json        — the canonical SDK config file a scenario runs OFF (written by
  *                                POST /api/scenarios/{id}/config from the browser settings; NOT TTL-swept)
  *   - config/{sid}.meta.json   — demo-only run parameters that are not SDK Config fields (authorize base,
@@ -35,6 +35,7 @@ final class Runtime
     public const TTL = 1800;
 
     public readonly string $runtimeDir;
+    private readonly string $baseDir;
     public readonly string $runsDir;
     public readonly string $configDir;
     public readonly string $configKeysDir;
@@ -42,9 +43,17 @@ final class Runtime
     public readonly string $routePath;
     public readonly string $statePath;
 
+    /** The runtime state directory: EXAMPLE_RUNTIME_DIR when set and non-empty, else `.runtime` in the example directory. */
+    public static function dirFor(string $baseDir): string
+    {
+        $env = getenv('EXAMPLE_RUNTIME_DIR');
+        return is_string($env) && $env !== '' ? rtrim($env, '/') : $baseDir . '/.runtime';
+    }
+
     public function __construct(string $baseDir)
     {
-        $this->runtimeDir = $baseDir . '/.runtime';
+        $this->baseDir = $baseDir;
+        $this->runtimeDir = self::dirFor($baseDir);
         $this->runsDir = $this->runtimeDir . '/runs';
         $this->configDir = $this->runtimeDir . '/config';
         $this->configKeysDir = $this->configDir . '/keys';
@@ -126,7 +135,8 @@ final class Runtime
 
     /**
      * Write a scenario's canonical SDK config file (spec §3 config endpoint). Atomic write-temp +
-     * rename. Returns the RELATIVE path (for display/inspection in the setup panel).
+     * rename. Returns the path for display/inspection in the setup panel: relative to the example
+     * directory under the default runtime directory, under the selected directory with EXAMPLE_RUNTIME_DIR.
      *
      * @param array<string,mixed> $config the canonical SDK config shape (snake_case keys, sdk.html §2/§12c)
      */
@@ -134,7 +144,9 @@ final class Runtime
     {
         $this->ensureDirs();
         $this->atomicWrite($this->configPathFor($scenarioId), json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        return '.runtime/config/' . self::sid($scenarioId) . '.json';
+        return $this->runtimeDir === $this->baseDir . '/.runtime'
+            ? '.runtime/config/' . self::sid($scenarioId) . '.json'
+            : $this->configPathFor($scenarioId);
     }
 
     /**

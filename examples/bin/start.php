@@ -6,7 +6,7 @@ declare(strict_types=1);
  * One-command launcher for the whole example test suite — one server, all three scenario families.
  *
  * Steps:
- *   1. wipe .runtime/ (fresh state each boot)
+ *   1. wipe the runtime state directory (.runtime/, or EXAMPLE_RUNTIME_DIR; fresh state each boot)
  *   2. composer install if vendor/ is missing
  *   3. on a missing bundle: fetch the pinned frontend release (frontend.lock), VERIFY sha256, unpack to
  *      .frontend/<tag>/ (a present, verified bundle is a cache hit — nothing is re-fetched)
@@ -26,8 +26,8 @@ chdir($base);
 fwrite(STDERR, "allus SDK examples — starting up\n");
 
 // 1. fresh runtime state
-rrmdir($base . '/.runtime');
-@mkdir($base . '/.runtime', 0700, true);
+require_once $base . '/src/Runtime.php';
+(new Allus\Examples\Runtime($base))->wipeAll();
 
 // 2. dependencies
 if (!is_file($base . '/vendor/autoload.php')) {
