@@ -179,7 +179,13 @@ final class CustomerClient
         return $this->http->post(self::CONSENTS . '/' . $consentId . '/decline');
     }
 
-    /** @param list<array{request_field_id:string,value:string,kind?:string}> $answers */
+    /**
+     * Edit a service link's answers. $answers is the WHOLE answer set: a row it sends nothing for is
+     * withdrawn, and an entry `['request_field_id' => …, 'kind' => 'keep']` (no value) keeps that
+     * row's stored answer; the API accepts it only for a row that holds an answer now.
+     *
+     * @param list<array{request_field_id:string,value?:string,kind?:string}> $answers
+     */
     public function editAnswers(string $connectionId, string $serviceLinkId, array $answers, string $companyCode, string $serviceCode): mixed
     {
         $decisions = $this->encryptTyped($answers, $companyCode, $serviceCode);
@@ -740,7 +746,7 @@ final class CustomerClient
     }
 
     /**
-     * @param list<array{request_field_id:string,value:string,kind?:string}> $answers
+     * @param list<array{request_field_id:string,value?:string,kind?:string}> $answers
      * @return list<array<string,mixed>>
      */
     private function encryptTyped(array $answers, string $companyCode, string $serviceCode): array
@@ -755,6 +761,11 @@ final class CustomerClient
         $types = $this->requestFieldTypes($companyCode, $serviceCode);
         $out = [];
         foreach ($answers as $a) {
+            // A kept row carries no value: nothing to validate or encrypt.
+            if (($a['kind'] ?? null) === 'keep') {
+                $out[] = ['request_field_id' => $a['request_field_id'], 'kind' => 'keep'];
+                continue;
+            }
             $plain = (string) $a['value'];
             $ftype = $types[(string) $a['request_field_id']] ?? null;
             if ($ftype !== null) {
