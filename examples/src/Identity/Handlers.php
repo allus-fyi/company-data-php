@@ -8,6 +8,7 @@ use Allus\CompanyData\Claim;
 use Allus\CompanyData\Client;
 use Allus\CompanyData\Config;
 use Allus\CompanyData\Errors\ApiError;
+use Allus\CompanyData\Errors\AuthError;
 use Allus\CompanyData\Errors\ConfigError;
 use Allus\CompanyData\Http\CurlTransport;
 use Allus\CompanyData\Http\HttpClient;
@@ -391,7 +392,7 @@ final class Handlers implements Family
 
     /**
      * Short-cycled advance for a pending run awaiting a detached / challenge outcome. ONE SDK wait with
-     * timeout=2 per poll; an SDK timeout is treated as still-pending. Clients are rebuilt from the run's
+     * timeout=2 per poll; a poll that got no HTTP response, or a 503, stays pending. Clients are rebuilt from the run's
      * scenario config file (amendment) — the run stores no credentials.
      *
      * @param array<string,mixed> $run
@@ -401,15 +402,13 @@ final class Handlers implements Family
     {
         $wait = $run['wait'] ?? null;
         $id = (int) ($run['scenario'] ?? 0);
+        $signinCode = '';
         try {
             if ($wait === 'detached_signin') {
                 $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_POLL_SIGNIN);
                 $oauth = $this->oauthClientFor($id, self::POLL_TRANSPORT_TIMEOUT_S);
                 $body = $oauth->pollResult((string) $run['state'], 2, 2); // loop timeout=2, 2s transport
-                $code = (string) ($body['code'] ?? '');
-                if ($code !== '') {
-                    $run = $this->completeSignin($run, $code);
-                }
+                $signinCode = (string) ($body['code'] ?? '');
             } elseif ($wait === 'detached_enroll') {
                 $run['calls'] = Runtime::addCall($run['calls'] ?? [], self::CALL_POLL_ENROLL);
                 $oauth = $this->oauthClientFor($id, self::POLL_TRANSPORT_TIMEOUT_S);
@@ -427,19 +426,36 @@ final class Handlers implements Family
             }
             // else (redirect / continue-on-phone flows): completion arrives via /callback — stay pending.
         } catch (ApiError $e) {
-            // The SDK poll helpers signal a LOGICAL "not completed within {n}s" timeout as ApiError(0)
-            // with that exact sentinel message. A real transport failure ALSO surfaces as ApiError(0)
-            // (CurlTransport), so the status alone cannot tell them apart — match the SDK's sentinel.
-            // Only the logical timeout is "still pending"; a real network/transport failure is a failed
-            // run (spec §3), not an eternal pending.
-            if ($e->status === 0 && str_contains($e->getMessage(), 'not completed within')) {
-                return $run; // logical short-cycle timeout → still pending
+            // A poll that never received an HTTP response (ApiError status 0: the SDK's logical
+            // "not completed within" timeout, a transport timeout or a connection failure) or that
+            // was answered 503 leaves the run pending; the next browser poll retries. Any other
+            // status is an answer another poll cannot change.
+            if ($e->status === 0 || $e->status === 503) {
+                return $run;
+            }
+            $run['status'] = 'failed';
+            $run['error'] = $e->getMessage();
+        } catch (AuthError $e) {
+            // The token request failed before any HTTP response arrived: pending. A token
+            // request the platform refused ("token request rejected …") ends the run.
+            if (str_starts_with($e->getMessage(), 'token request failed:')) {
+                return $run;
             }
             $run['status'] = 'failed';
             $run['error'] = $e->getMessage();
         } catch (\Throwable $e) {
             $run['status'] = 'failed';
             $run['error'] = $e->getMessage();
+        }
+        // The delivered code is one-shot, so completing the sign-in is outside the retry rule above: a
+        // failure here ends the run instead of re-polling a result that is already consumed.
+        if ($signinCode !== '') {
+            try {
+                $run = $this->completeSignin($run, $signinCode);
+            } catch (\Throwable $e) {
+                $run['status'] = 'failed';
+                $run['error'] = $e->getMessage();
+            }
         }
         return $run;
     }
