@@ -179,8 +179,8 @@ Inbound delivery to your `localhost` requires a public URL, which is **optional*
   cloudflared tunnel --url http://localhost:8091
   ```
 
-  (A local stack whose delivery worker can reach `localhost` directly can register
-  `http://localhost:8091/webhook` without a tunnel.)
+  (A webhook URL must be `https` on port 443 to a public address, so a `localhost` URL is
+  refused on every stack.)
 
 ---
 
