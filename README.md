@@ -523,7 +523,7 @@ entry additionally carries `plain_sha256`, `signer_first_name`,
 ### `listDocuments(...)` / `document($id)`
 
 ```php
-listDocuments(?string $personUserId = null, ?string $status = null, int $limit = 100, int $offset = 0): array  // list<Document>
+listDocuments(?string $personUserId = null, ?string $status = null, int $limit = 100): \Generator  // of Document
 document(string $documentId): Document
 documentFile(string $documentId): string   // #491: the file BYTES
 ```
@@ -537,7 +537,7 @@ $doc = $client->document($documentId);
 $value = $doc->payloadKind === 'json' ? $doc->json() : $doc->value;   // json() decrypts per-person docs
 ```
 
-* `listDocuments` filters optionally by `personUserId` and/or `status` and pages with `limit`/`offset`.
+* `listDocuments` yields every document of the service, newest first, filtered optionally by `personUserId` and/or `status`. It is a lazy generator over `GET /api/company-data/documents`'s cursor: `limit` is the page size (1–500), each page's `next` marker is sent back as `after`, and the next page is fetched only once this one is consumed.
 * `document($id)` fetches one. Call `->json()` on a `'json'` document to get the plaintext (it transparently decrypts a per-person, encrypted document; a broadcast doc is already plaintext).
 * `documentFile($id)` downloads a `'file'` document's BYTES — the metadata methods don't include them. A **broadcast** (plaintext) document's bytes are returned as-is; a **per-person / private** document is encrypted to the *recipient's* key (not your service key), so `documentFile` fails clearly with `documents.recipient_encrypted` rather than a doomed decrypt. For a generated flow document's own copy use `flowRunDocument($runId, $outputKey)` below (that copy IS service-key-encrypted).
 

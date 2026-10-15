@@ -1040,26 +1040,40 @@ final class Client
     }
 
     /**
-     * List this service's documents → {@code list<Document>} (paged; optional
-     * person/status filter).
+     * Every document of this service, newest first → a lazy {@code Generator<Document>}
+     * (optional person/status filter). It pages {@code GET /api/company-data/documents}
+     * with its cursor: {@code $limit} is the page size (1–500), and each page's
+     * {@code next} marker is sent back as {@code after} until a page answers none. A page
+     * is fetched only once the previous one has been consumed.
      *
-     * @return list<Document>
+     * @return \Generator<int, Document>
      */
     public function listDocuments(
         ?string $personUserId = null,
         ?string $status = null,
         int $limit = 100,
-        int $offset = 0,
-    ): array {
-        $params = ['limit' => max(1, $limit), 'offset' => max(0, $offset)];
+    ): \Generator {
+        $params = ['limit' => min(500, max(1, $limit))];
         if ($personUserId !== null && $personUserId !== '') {
             $params['person_user_id'] = $personUserId;
         }
         if ($status !== null && $status !== '') {
             $params['status'] = $status;
         }
-        $body = $this->http->get(self::DOCUMENTS, $params);
-        return Document::listFromApi(is_array($body) ? $body : [], fn (array|string $w): string => $this->decryptValue($w));
+        $after = null;
+        while (true) {
+            $page = $after !== null ? $params + ['after' => $after] : $params;
+            $body = $this->http->get(self::DOCUMENTS, $page);
+            $docs = Document::listFromApi(is_array($body) ? $body : [], fn (array|string $w): string => $this->decryptValue($w));
+            foreach ($docs as $doc) {
+                yield $doc;
+            }
+            $next = is_array($body) ? ($body['next'] ?? null) : null;
+            if (!is_string($next) || $next === '') {
+                return;
+            }
+            $after = $next;
+        }
     }
 
     /** Fetch one document by id → {@see Document}. */

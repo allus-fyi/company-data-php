@@ -773,7 +773,7 @@ final class ClientTest extends TestCase
         $seen = [];
         $getRouter = function (string $url, ?array $q): Response {
             if (str_ends_with($url, '/documents')) {
-                return FakeTransport::json(200, ['total' => 0, 'items' => []]);
+                return FakeTransport::json(200, ['items' => [], 'next' => null]);
             }
             if (str_contains($url, '/documents/d9')) {
                 return FakeTransport::json(200, ['id' => 'd9', 'payload_kind' => 'json', 'is_private' => false, 'value' => ['a' => 1]]);
@@ -785,7 +785,7 @@ final class ClientTest extends TestCase
             return FakeTransport::json(200, ['id' => 'd9', 'payload_kind' => 'json', 'is_private' => false, 'value' => ['a' => 1], 'status' => 'ended']);
         };
         [$client] = $this->clientRw($getRouter, $writeRouter);
-        self::assertSame([], $client->listDocuments(status: 'active'));
+        self::assertSame([], iterator_to_array($client->listDocuments(status: 'active'), false));
         self::assertSame('d9', $client->document('d9')->id);
         $client->updateDocumentStatus('d9', 'ended');
         $client->updateDocumentMetadata('d9', name: 'renamed');
