@@ -15,7 +15,8 @@ use Allus\CompanyData\Crypto\BinaryHandle;
  * present on every event (may be null). {@see $slug}/{@see $value}/{@see $live}
  * are present only on {@code field_updated} (connection/consent events carry no
  * slot/value). {@see $documentId}/{@see $status}/{@see $note} are set on
- * {@code document_status_changed}.
+ * {@code document_status_changed}; {@see $documentId}/{@see $sealedAt}/{@see $plainSha256} are set
+ * on {@code document_sealed}.
  */
 final class Change
 {
@@ -34,13 +35,13 @@ final class Change
         public readonly ?string $slug = null,
         public readonly string|array|\DateTimeImmutable|BinaryHandle|PluginValue|null $value = null,
         public readonly ?bool $live = null,
-        /** Set on document_status_changed. */
+        /** Set on document_status_changed and document_sealed. */
         public readonly ?string $documentId = null,
         /** Set on document_status_changed. */
         public readonly ?string $status = null,
         /** Set on document_status_changed for a contract: signed | accepted | cancelled. */
         public readonly ?string $action = null,
-        /** Set on document_status_changed: the person's optional cancellation note. */
+        /** Set on document_status_changed: the person's optional cancellation note, decrypted from service-key ciphertext. */
         public readonly ?string $note = null,
         /** Set on a signature: biometric | twofa | email | custodian. */
         public readonly ?string $method = null,
@@ -50,11 +51,11 @@ final class Change
         public readonly ?string $signedAt = null,
         /** Set on a cancelled document_status_changed: ISO date the cancellation takes effect. */
         public readonly ?string $cancelEffectiveDate = null,
-        /** Set on document_status_changed: when the platform seal was applied. Null until sealed. */
+        /** Set on document_sealed: when the platform seal was applied. Null on every other event. */
         public readonly ?\DateTimeImmutable $sealedAt = null,
-        /** Set on document_status_changed: SHA-256 of the document's unencrypted PDF bytes. Null on a JSON contract. */
+        /** Set on document_sealed: SHA-256 of the document's unencrypted PDF bytes, lowercase hex. Null on every other event. */
         public readonly ?string $plainSha256 = null,
-        /** Set on document_status_changed: the signature's own signer evidence. */
+        /** Set on document_status_changed: the signature's own signer evidence, decrypted from service-key ciphertext. */
         public readonly ?string $signerFirstName = null,
         public readonly ?string $signerLastName = null,
         /** True iff the submitted name matched the signer's verified ID name. Null when unset. */
@@ -136,6 +137,16 @@ final class Change
             }
         }
 
+        // document_status_changed carries the signer names and the cancellation note as
+        // service-key ciphertext, opened by the same decrypt as a message body. An empty
+        // string (the XML rendering of a null member) reads as null and is not decrypted.
+        $isDocStatus = $event === 'document_status_changed';
+        $openDoc = static function (string $key) use ($isDocStatus, $obj, $decryptValue): ?string {
+            $cipher = $isDocStatus ? ($obj[$key] ?? null) : null;
+            return (is_array($cipher) || (is_string($cipher) && $cipher !== '')) ? $decryptValue($cipher) : null;
+        };
+        $isSealed = $event === 'document_sealed';
+
         return new self(
             id: isset($obj['id']) ? (string) $obj['id'] : null,
             event: $event,
@@ -150,15 +161,15 @@ final class Change
             // its challenge_id/completed_at stay in $raw. The poll is the record (spec §3).
             status: (($event === 'document_status_changed' || $event === '2fa_challenge_completed') && isset($obj['status'])) ? (string) $obj['status'] : null,
             action: ($event === 'document_status_changed' && isset($obj['action'])) ? (string) $obj['action'] : null,
-            note: ($event === 'document_status_changed' && isset($obj['note'])) ? (string) $obj['note'] : null,
+            note: $openDoc('note'),
             method: ($event === 'document_status_changed' && isset($obj['method'])) ? (string) $obj['method'] : null,
             contentSha256: ($event === 'document_status_changed' && isset($obj['content_sha256'])) ? (string) $obj['content_sha256'] : null,
             signedAt: ($event === 'document_status_changed' && isset($obj['signed_at'])) ? (string) $obj['signed_at'] : null,
             cancelEffectiveDate: ($event === 'document_status_changed' && isset($obj['cancel_effective_date'])) ? (string) $obj['cancel_effective_date'] : null,
-            sealedAt: $event === 'document_status_changed' ? Coerce::dateTime($obj['sealed_at'] ?? null) : null,
-            plainSha256: ($event === 'document_status_changed' && isset($obj['plain_sha256'])) ? (string) $obj['plain_sha256'] : null,
-            signerFirstName: ($event === 'document_status_changed' && isset($obj['signer_first_name'])) ? (string) $obj['signer_first_name'] : null,
-            signerLastName: ($event === 'document_status_changed' && isset($obj['signer_last_name'])) ? (string) $obj['signer_last_name'] : null,
+            sealedAt: $isSealed ? Coerce::dateTime($obj['sealed_at'] ?? null) : null,
+            plainSha256: ($isSealed && isset($obj['plain_sha256'])) ? (string) $obj['plain_sha256'] : null,
+            signerFirstName: $openDoc('signer_first_name'),
+            signerLastName: $openDoc('signer_last_name'),
             signerNameVerified: ($event === 'document_status_changed' && isset($obj['signer_name_verified'])) ? Coerce::bool($obj['signer_name_verified']) : null,
             requestId: (in_array($event, ['connection_request_accepted', 'connection_request_rejected'], true)
                 && isset($obj['request_id'])) ? (string) $obj['request_id'] : null,

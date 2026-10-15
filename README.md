@@ -758,11 +758,15 @@ $client->deleteDocument($documentId);                          // also removes t
 
 When a document's lifecycle status changes, the feed/webhook emits a
 `document_status_changed` `Change` carrying `documentId` + the new `status` (and
-the usual `personId` / `shareCode` / `at`). A transition to `active`
-additionally carries `sealedAt`, `plainSha256`, `signerFirstName`,
-`signerLastName` and `signerNameVerified` — the same seal state the document
-read carries, so you never need a follow-up `document($id)` call just to learn
-a run sealed. Handle it alongside your field events:
+the usual `personId` / `shareCode` / `at`). A signature also carries
+`signerFirstName`, `signerLastName` and `signerNameVerified`, and a cancellation
+its `note`; the signer names and the note arrive encrypted to your service key and
+the SDK decrypts them. When the platform seals a file document (never a JSON
+contract) the feed/webhook emits a separate `document_sealed` `Change` carrying
+`documentId`, `sealedAt` and `plainSha256` — the same seal state the document read
+carries, so you never need a follow-up `document($id)` call just to learn a
+document sealed. A webhook receives `document_sealed` only when it subscribes to
+it (or has an empty event filter, which receives every event). Handle them alongside your field events:
 
 ```php
 $client->processChanges(function (\Allus\CompanyData\Model\Change $change): void {
@@ -772,6 +776,7 @@ $client->processChanges(function (\Allus\CompanyData\Model\Change $change): void
     match ($change->event) {
         'field_updated'           => store($change->personId, $change->slug, $change->value),
         'document_status_changed' => onDocumentStatus($change->documentId, $change->status, $change->personId),
+        'document_sealed'         => onDocumentSealed($change->documentId, $change->sealedAt, $change->plainSha256),
         default                   => null,
     };
     markProcessed($change->id);
@@ -1040,12 +1045,13 @@ A change-feed / webhook event.
 | Property | Meaning |
 |----------|---------|
 | `id` | **The stable server change-row id — your dedup key** (captured before the server delete). |
-| `event` | `connection_created`, `connection_deleted`, `field_updated`, `field_deleted`, `consent_accepted`, `consent_declined`, `document_status_changed`, `message_received`. |
+| `event` | `connection_created`, `connection_deleted`, `field_updated`, `field_deleted`, `consent_accepted`, `consent_declined`, `document_status_changed`, `document_sealed`, `message_received`. |
 | `personId` | The person the change is about (may be `null`). |
 | `shareCode` | The person's profile share code — present on every event (may be `null`). |
 | `slug`, `value`, `live` | Present only on `field_updated`; `value` is typed exactly like `Value->value` (incl. a lazy `BinaryHandle` for binaries). Connection/consent events carry no slot/value. |
-| `documentId`, `status` | Present only on `document_status_changed` — the document's id and its new lifecycle status. |
-| `sealedAt`, `plainSha256`, `signerFirstName`, `signerLastName`, `signerNameVerified` | Present on a `document_status_changed` transition to `active` — the same seal state the document read carries. `null` otherwise. |
+| `documentId`, `status` | `documentId` is present on `document_status_changed` and `document_sealed`; `status` only on `document_status_changed` — the document's new lifecycle status. |
+| `signerFirstName`, `signerLastName`, `signerNameVerified`, `note` | Present on `document_status_changed` — the signer evidence and the cancellation note. The names and the note arrive encrypted to your service key; the SDK decrypts them. `null` otherwise. |
+| `sealedAt`, `plainSha256` | Present only on `document_sealed` — the platform sealed a file document; the same seal state the document read carries. `null` otherwise. |
 | `connectionId`, `messageId`, `personPublicKey`, `messageBody` | Present only on `message_received` — a person messaged your service. `messageBody` is the **decrypted** text. See [Messaging](#messaging). |
 | `verified`, `verifiedAt`, `verifiedExpiresAt` | Present on `field_updated`, with the same meaning as on `Value`. |
 | `verifiedMethod`, `verifiedProvider`, `verificationId` | The proof metadata, same meaning and same all-or-none rule as on `Value`. |

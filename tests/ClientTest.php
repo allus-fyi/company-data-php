@@ -874,10 +874,10 @@ final class ClientTest extends TestCase
 
         $cancelled = Change::fromApi(
             ['id' => 'chg-cancel', 'event' => 'document_status_changed', 'person_user_id' => 'u-3',
-             'action' => 'cancelled', 'note' => 'Too expensive', 'document_id' => 'doc-8', 'status' => 'ended',
-             'at' => '2026-06-22T11:00:00Z'],
+             'action' => 'cancelled', 'note' => json_encode(Vector::encryptForKey('Too expensive'), JSON_THROW_ON_ERROR),
+             'document_id' => 'doc-8', 'status' => 'ended', 'at' => '2026-06-22T11:00:00Z'],
             fn (string $s): ?string => null, FakeTransport::fieldTypes(...),
-            fn (array|string $w): string => '',
+            fn (array|string $w): string => Crypto::decrypt($w, Vector::privateKey()),
         );
         self::assertSame('cancelled', $cancelled->action);
         self::assertSame('Too expensive', $cancelled->note);

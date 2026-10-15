@@ -214,6 +214,8 @@ final class Change {
 | `field_updated` | `slug` + decrypted `value` (+ `live`); binary → a lazy `BinaryHandle` |
 | `field_deleted` | `slug`, no value |
 | `consent_accepted` / `consent_declined` | `slug` |
+| `document_status_changed` | `documentId` + `status` (+ `action`, `method`, `contentSha256`, `signedAt`, `cancelEffectiveDate`); `signerFirstName`, `signerLastName` and `note` arrive encrypted to the service key and are DECRYPTED; `signerNameVerified` |
+| `document_sealed` | `documentId`, `sealedAt`, `plainSha256` — the platform sealed a file document (never a JSON contract). A webhook receives it only when it subscribes to it (or has an empty event filter, which receives every event) |
 | `message_received` | `connectionId`, `messageId`, `personPublicKey` + `messageBody` (the DECRYPTED message text); no slot. Person→company only — a broadcast raises no event |
 
 The event's ciphertext is carried under `body`. It is never `value`: on every other
