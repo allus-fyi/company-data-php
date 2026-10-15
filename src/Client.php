@@ -40,9 +40,9 @@ use phpseclib3\Crypt\RSA\PublicKey as RSAPublicKey;
  * live there and nowhere else), then call:
  *
  *     $client->requestFields()              -> list<RequestField>  (slug -> meta, cached)
- *     $client->connections($limit, $offset) -> Generator<Connection> (auto-paged, lazy)
+ *     $client->connections($limit)          -> Generator<Connection> (auto-paged, lazy)
  *     $client->connection($id)              -> Connection
- *     $client->logs($limit, $offset)        -> list<LogEntry>
+ *     $client->logs($limit)                 -> Generator<LogEntry> (auto-paged, lazy)
  *     $client->processChanges($handler)     -> the crash-safe pump
  *     $client->drainBatch($max)             -> list<Change>  (raw unbuffered — advanced)
  *     $client->deadLetters() / $client->retryDeadLetters($handler)
@@ -91,6 +91,9 @@ final class Client
     private const KEYS = '/api/keys';
 
     private const DEFAULT_CONN_PAGE = 100;
+
+    /** Page size {@see flowRuns()} reads the run list with (the list's maximum). */
+    private const FLOW_RUN_PAGE = 500;
 
     // Bounded extra backoff for the connections iterator on a surfaced 429.
     private const CONN_MAX_429_BACKOFFS = 5;
@@ -438,11 +441,12 @@ final class Client
     /**
      * A lazy generator paging the list endpoint, yielding one Connection at a time.
      *
-     * {@code $limit} is the page size; {@code $offset} the starting offset. The
-     * generator auto-pages {@code GET /api/company-data/connections?limit&offset}
-     * and yields typed {@see Connection} objects (each {@code values[slug]} already
-     * decrypted / a lazy binary handle) one at a time — bounded memory for a large
-     * book.
+     * {@code $limit} is the page size. The generator pages
+     * {@code GET /api/company-data/connections} with its cursor — each page's {@code next}
+     * marker is sent back as {@code after} until a page answers none — and yields typed
+     * {@see Connection} objects (each {@code values[slug]} already decrypted / a lazy binary
+     * handle) one at a time — bounded memory for a large book. A page is fetched only once the
+     * previous one has been consumed.
      *
      * The connections endpoints are **heavily rate-limited**: use
      * this for the initial full sync + occasional reconciliation, never as a poll
@@ -452,20 +456,16 @@ final class Client
      *
      * @return \Generator<int, Connection>
      */
-    public function connections(int $limit = self::DEFAULT_CONN_PAGE, int $offset = 0): \Generator
+    public function connections(int $limit = self::DEFAULT_CONN_PAGE): \Generator
     {
         $page = max(1, $limit);
-        $cur = max(0, $offset);
         // Ensure the slug catalog is loaded so values are typed correctly.
         $this->requestFields();
 
+        $after = null;
         while (true) {
-            $body = $this->getConnectionsPage($page, $cur);
-            $items = self::listItems($body);
-            if ($items === []) {
-                return;
-            }
-            foreach ($items as $obj) {
+            $body = $this->getConnectionsPage($page, $after);
+            foreach (self::listItems($body) as $obj) {
                 if (!is_array($obj)) {
                     continue;
                 }
@@ -479,11 +479,10 @@ final class Client
                     identity: $obj,
                 );
             }
-            // A short page means we reached the end.
-            if (count($items) < $page) {
+            $after = self::nextMarker($body);
+            if ($after === null) {
                 return;
             }
-            $cur += $page;
         }
     }
 
@@ -492,12 +491,16 @@ final class Client
      *
      * @return array<string,mixed>|list<mixed>|string
      */
-    private function getConnectionsPage(int $page, int $offset): array|string
+    private function getConnectionsPage(int $page, ?string $after): array|string
     {
+        $params = ['limit' => $page];
+        if ($after !== null) {
+            $params['after'] = $after;
+        }
         $attempts = 0;
         while (true) {
             try {
-                return $this->http->get(self::CONNECTIONS, ['limit' => $page, 'offset' => $offset]);
+                return $this->http->get(self::CONNECTIONS, $params);
             } catch (RateLimitError $exc) {
                 $attempts++;
                 if ($attempts > self::CONN_MAX_429_BACKOFFS) {
@@ -505,8 +508,7 @@ final class Client
                 }
                 $delay = self::connBackoff($exc->retryAfter, $attempts);
                 $this->log->warning(sprintf(
-                    'connections rate-limited (offset=%d); backoff %.1fs (attempt %d)',
-                    $offset,
+                    'connections rate-limited; backoff %.1fs (attempt %d)',
                     $delay,
                     $attempts,
                 ));
@@ -562,17 +564,29 @@ final class Client
     // ── logs (moderate rate-limit) ──────────────────────────────────────────────
 
     /**
-     * The service's activity log → {@code list<LogEntry>}.
+     * The service's activity log, newest first → a lazy {@code Generator<LogEntry>}.
      *
-     * {@code GET /api/company-data/logs?limit&offset}. Ops events only (email /
-     * purge / webhook) — never person field data.
+     * It pages {@code GET /api/company-data/logs} with its cursor: {@code $limit} is the page
+     * size (1–200), and each page's {@code next} marker is sent back as {@code after} until a
+     * page answers none. Ops events only (email / purge / webhook) — never person field data.
      *
-     * @return list<LogEntry>
+     * @return \Generator<int, LogEntry>
      */
-    public function logs(int $limit = 50, int $offset = 0): array
+    public function logs(int $limit = 50): \Generator
     {
-        $body = $this->http->get(self::LOGS, ['limit' => max(1, $limit), 'offset' => max(0, $offset)]);
-        return LogEntry::listFromApi(is_array($body) ? $body : []);
+        $params = ['limit' => min(200, max(1, $limit))];
+        $after = null;
+        while (true) {
+            $page = $after !== null ? $params + ['after' => $after] : $params;
+            $body = $this->http->get(self::LOGS, $page);
+            foreach (LogEntry::listFromApi(is_array($body) ? $body : []) as $entry) {
+                yield $entry;
+            }
+            $after = self::nextMarker($body);
+            if ($after === null) {
+                return;
+            }
+        }
     }
 
     // ── changes feed — the crash-safe pump ────────────────────────
@@ -1068,11 +1082,10 @@ final class Client
             foreach ($docs as $doc) {
                 yield $doc;
             }
-            $next = is_array($body) ? ($body['next'] ?? null) : null;
-            if (!is_string($next) || $next === '') {
+            $after = self::nextMarker($body);
+            if ($after === null) {
                 return;
             }
-            $after = $next;
         }
     }
 
@@ -1552,22 +1565,36 @@ final class Client
     }
 
     /**
-     * List this service's runs. A {@code null} status returns the unfiltered list; the default
-     * {@code 'awaiting_company'} is the actionable queue. Any other value is a status filter.
+     * List this service's runs, newest first. A {@code null} status returns the unfiltered list;
+     * the default {@code 'awaiting_company'} is the actionable queue. Any other value is a status
+     * filter. Every page of {@code GET /api/company-data/flow-runs} is read, following its cursor
+     * ({@code next} sent back as {@code after}) until a page answers none.
      *
      * @return list<FlowRun>
      */
     public function flowRuns(?string $status = 'awaiting_company'): array
     {
-        $params = ($status !== null && $status !== '') ? ['status' => $status] : null;
-        $body = $this->http->get(self::FLOW_RUNS, $params);
         $out = [];
-        foreach (self::listItems($body) as $o) {
-            if (is_array($o)) {
-                $out[] = FlowRun::fromApi($o);
+        $after = null;
+        while (true) {
+            $params = ['limit' => self::FLOW_RUN_PAGE];
+            if ($status !== null && $status !== '') {
+                $params['status'] = $status;
+            }
+            if ($after !== null) {
+                $params['after'] = $after;
+            }
+            $body = $this->http->get(self::FLOW_RUNS, $params);
+            foreach (self::listItems($body) as $o) {
+                if (is_array($o)) {
+                    $out[] = FlowRun::fromApi($o);
+                }
+            }
+            $after = self::nextMarker($body);
+            if ($after === null) {
+                return $out;
             }
         }
-        return $out;
     }
 
     /** Fetch one run by id → {@see FlowRun}. */
@@ -2014,7 +2041,19 @@ final class Client
     }
 
     /**
-     * Pull the {@code items} array out of a {@code {total, items}} list response.
+     * A cursor-paged list response's {@code next} marker, or null on the last page. An empty
+     * string — what an XML response carries for a null {@code next} — is the last page too.
+     *
+     * @param array<string,mixed>|list<mixed>|string $body
+     */
+    private static function nextMarker(array|string $body): ?string
+    {
+        $next = is_array($body) ? ($body['next'] ?? null) : null;
+        return is_string($next) && $next !== '' ? $next : null;
+    }
+
+    /**
+     * Pull the {@code items} array out of a {@code {items, next}} list response.
      *
      * @param array<string,mixed>|list<mixed>|string $body
      *

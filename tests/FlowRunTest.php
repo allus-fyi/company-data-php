@@ -178,14 +178,18 @@ final class FlowRunTest extends TestCase
 
     public function testFlowRunsDefaultAwaitingCompany(): void
     {
-        $client = $this->clientRw(function (string $url, ?array $q): Response {
+        $afters = [];
+        $client = $this->clientRw(function (string $url, ?array $q) use (&$afters): Response {
             self::assertStringEndsWith('/company-data/flow-runs', $url);
             self::assertSame('awaiting_company', $q['status'] ?? null);
-            return FakeTransport::json(200, ['total' => 1, 'items' => [self::runObj()]]);
+            $after = $q['after'] ?? null;
+            $afters[] = $after;
+            return FakeTransport::json(200, ['items' => [self::runObj()], 'next' => $after === null ? 'm1' : null]);
         }, fn (string $m, string $u, ?string $b): Response => FakeTransport::json(200, []));
         $runs = $client->flowRuns();
-        self::assertCount(1, $runs);
+        self::assertCount(2, $runs);
         self::assertSame('awaiting_company', $runs[0]->status);
+        self::assertSame([null, 'm1'], $afters);
     }
 
     public function testFlowRunById(): void

@@ -252,7 +252,7 @@ final class ModelsTest extends TestCase
 
     public function testLogEntriesParsed(): void
     {
-        $body = ['total' => 2, 'items' => [
+        $body = ['items' => [
             ['type' => 'email', 'message' => 'stale-queue alert', 'metadata' => ['days' => 3],
              'at' => '2026-06-17T06:00:00Z'],
             ['type' => 'purge', 'message' => 'purged 4 changes', 'metadata' => ['count' => 4],

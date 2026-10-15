@@ -137,7 +137,7 @@ final class ClientTest extends TestCase
     public function testConnectionsYieldsTypedDecrypted(): void
     {
         $addrWrapper = Vector::encryptForKey(json_encode(['city' => 'Utrecht', 'country' => 'NL'], JSON_THROW_ON_ERROR));
-        $page1 = ['total' => 2, 'items' => [[
+        $page1 = ['items' => [[
             'connection_id' => 'csc-1',
             'user_id' => 'person-1',
             'display_name' => 'Anna',
@@ -182,8 +182,8 @@ final class ClientTest extends TestCase
     {
         $makeItem = fn (int $i) => ['connection_id' => "c{$i}", 'user_id' => "p{$i}", 'display_name' => "N{$i}", 'values' => []];
         $pages = [
-            ['total' => 3, 'items' => [$makeItem(1), $makeItem(2)]], // full page (==limit 2)
-            ['total' => 3, 'items' => [$makeItem(3)]],                 // short page → stop
+            ['items' => [$makeItem(1), $makeItem(2)], 'next' => 'm1'],
+            ['items' => [$makeItem(3)], 'next' => null],
         ];
         $i = 0;
         [$client, $t] = $this->client(function (string $url, ?array $q) use ($pages, &$i): Response {
@@ -199,14 +199,17 @@ final class ClientTest extends TestCase
         $ids = array_map(fn ($c) => $c->id, iterator_to_array($client->connections(limit: 2)));
         self::assertSame(['c1', 'c2', 'c3'], $ids);
         $connGets = array_values(array_filter($t->gets, fn ($g) => str_ends_with($g['url'], '/connections')));
-        self::assertSame([0, 2], array_map(fn ($g) => $g['query']['offset'], $connGets));
+        self::assertSame([null, 'm1'], array_map(fn ($g) => $g['query']['after'] ?? null, $connGets));
+        foreach ($connGets as $g) {
+            self::assertArrayNotHasKey('offset', $g['query']);
+        }
     }
 
     // ── binary handle fetches the slot endpoint + decrypts ─────────────────────
 
     public function testBinaryHandleFetchesSlotAndDecrypts(): void
     {
-        $page = ['total' => 1, 'items' => [[
+        $page = ['items' => [[
             'connection_id' => 'csc-1', 'user_id' => 'person-1', 'display_name' => 'Anna',
             'values' => ['logo' => ['value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file', 'live' => true]],
         ]]];
@@ -241,7 +244,7 @@ final class ClientTest extends TestCase
      */
     public function testBinaryHandleServesPlaintextBytes(): void
     {
-        $page = ['total' => 1, 'items' => [[
+        $page = ['items' => [[
             'connection_id' => 'csc-1', 'user_id' => 'person-1', 'display_name' => 'Anna',
             'values' => ['logo' => ['value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file', 'live' => true]],
         ]]];
@@ -272,7 +275,7 @@ final class ClientTest extends TestCase
     /** A 410 file_expired surfaces the digest and the expiry date through ApiError::$details. */
     public function testBinaryHandleExpiredAnswerCarriesDigest(): void
     {
-        $page = ['total' => 1, 'items' => [[
+        $page = ['items' => [[
             'connection_id' => 'csc-1', 'user_id' => 'person-1', 'display_name' => 'Anna',
             'values' => ['logo' => ['value_url' => 'https://api.allme.fyi/api/company-data/connections/csc-1/slots/sf-9/file', 'live' => false]],
         ]]];
@@ -369,22 +372,28 @@ final class ClientTest extends TestCase
 
     public function testLogsDeserialize(): void
     {
-        $body = ['total' => 2, 'items' => [
-            ['type' => 'email', 'message' => 'stale-queue alert', 'metadata' => ['days' => 3], 'created_at' => '2026-06-17T06:00:00Z'],
-            ['type' => 'purge', 'message' => 'purged 4', 'metadata' => ['count' => 4], 'created_at' => '2026-06-17T07:00:00Z'],
-        ]];
-        [$client, $t] = $this->client(function (string $url, ?array $q) use ($body): Response {
+        $pages = [
+            ['items' => [
+                ['type' => 'email', 'message' => 'stale-queue alert', 'metadata' => ['days' => 3], 'created_at' => '2026-06-17T06:00:00Z'],
+            ], 'next' => 'm1'],
+            ['items' => [
+                ['type' => 'purge', 'message' => 'purged 4', 'metadata' => ['count' => 4], 'created_at' => '2026-06-17T07:00:00Z'],
+            ], 'next' => null],
+        ];
+        $i = 0;
+        [$client, $t] = $this->client(function (string $url, ?array $q) use ($pages, &$i): Response {
             if (str_ends_with($url, '/logs')) {
-                return FakeTransport::json(200, $body);
+                return FakeTransport::json(200, $pages[$i++]);
             }
             throw new \AssertionError("unexpected GET {$url}");
         });
-        $logs = $client->logs(limit: 50);
+        $logs = iterator_to_array($client->logs(limit: 50), false);
         self::assertCount(2, $logs);
         self::assertContainsOnlyInstancesOf(LogEntry::class, $logs);
         self::assertSame('email', $logs[0]->type);
         self::assertSame(['days' => 3], $logs[0]->metadata);
         self::assertSame(50, $t->gets[0]['query']['limit']);
+        self::assertSame([null, 'm1'], array_map(fn ($g) => $g['query']['after'] ?? null, $t->gets));
     }
 
     // ── process_changes() drains the feed through the pump one-by-one ──────────
