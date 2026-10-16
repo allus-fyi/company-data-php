@@ -158,7 +158,10 @@ final class FieldTypes
      * with nothing set, and callers must read it as "this client cannot draw or store this",
      * never as a default.
      *
-     * @return array{type:string,parent:?string,label:string,is_system:bool,known:bool,input:?string,lane:?string,check:?string,options:?array,fields:?array,validations:list<string>}
+     * {@code system_only} marks a type written by the platform alone. It is read off the type's
+     * own row, never inherited, and is false for a type the registry does not carry.
+     *
+     * @return array{type:string,parent:?string,label:string,is_system:bool,system_only:bool,known:bool,input:?string,lane:?string,check:?string,options:?array,fields:?array,validations:list<string>}
      */
     public function resolve(?string $type): array
     {
@@ -176,6 +179,7 @@ final class FieldTypes
                 'parent' => null,
                 'label' => $type,
                 'is_system' => false,
+                'system_only' => false,
                 'known' => false,
                 'input' => null,
                 'lane' => null,
@@ -202,6 +206,7 @@ final class FieldTypes
             'parent' => $row['parent'] ?? null,
             'label' => (string) ($row['label'] ?? $type),
             'is_system' => (bool) ($row['is_system'] ?? false),
+            'system_only' => (bool) ($row['system_only'] ?? false),
             'known' => true,
             'input' => null,
             'lane' => null,
@@ -343,21 +348,31 @@ final class FieldTypes
         return null;
     }
 
-    /** @return list<string> the types a contact field, a request row or an admin field may declare */
+    /**
+     * The types a contact field, a request row or an admin field may declare: every type except
+     * an option-less choice type and a system-only type.
+     *
+     * @return list<string>
+     */
     public function requestableTypes(): array
     {
         return array_values(array_filter(
             $this->types(),
-            fn (string $type): bool => !$this->isOptionLessChoice($type),
+            fn (string $type): bool => !$this->isOptionLessChoice($type) && !$this->resolve($type)['system_only'],
         ));
     }
 
-    /** @return list<string> the requestable set plus the option-less choice types a flow element supplies options for */
+    /**
+     * The requestable set plus the option-less choice types a flow element supplies options for.
+     * A system-only type is in neither half.
+     *
+     * @return list<string>
+     */
     public function flowTypes(): array
     {
         return array_values(array_unique([...$this->requestableTypes(), ...array_filter(
             $this->types(),
-            fn (string $type): bool => $this->isOptionLessChoice($type),
+            fn (string $type): bool => $this->isOptionLessChoice($type) && !$this->resolve($type)['system_only'],
         )]));
     }
 
